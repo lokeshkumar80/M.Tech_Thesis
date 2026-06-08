@@ -133,21 +133,6 @@ mtech-thesis/
 
 ---
 
-## 🔖 References
-
-1. Baevski, A., Zhou, Y., Mohamed, A., & Auli, M. (2020). *wav2vec 2.0: A Framework for Self-supervised Learning of Speech Representations.* NeurIPS 2020.
-2. Conneau, A., et al. (2021). *Unsupervised Cross-lingual Representation Learning for Speech Recognition.* Interspeech 2021. arXiv:2006.13979.
-3. Babu, A., et al. (2022). *XLS-R: Self-supervised Cross-lingual Speech Representation Learning at Scale.* Interspeech 2022. arXiv:2111.09296.
-4. Radford, A., et al. (2022). *Robust Speech Recognition via Large-Scale Weak Supervision (Whisper).* ICML 2023. arXiv:2212.04356.
-5. Fan, R., Zheng, R., & Alwan, A. (2024). *Benchmarking Children's ASR with Supervised and Self-supervised Speech Foundation Models.* Interspeech 2024. arXiv:2406.10507.
-6. Lu, Y., Nicolao, L., & Bhatt, N. (2022). *Improving Children's Speech Recognition by Fine-tuning Self-supervised Adult Speech Representations.* arXiv:2211.07769.
-7. Pratap, V., et al. (2020). *MLS: A Large-Scale Multilingual Dataset for Speech Research.* Interspeech 2020.
-8. Wang, C., et al. (2021). *VoxPopuli: A Large-scale Multilingual Speech Corpus.* ACL 2021.
-9. Valk, J., & Alumäe, T. (2021). *VoxLingua107: a Dataset for Spoken Language Recognition.* SLT 2021.
-10. Shobaki, K., et al. (2000). *The OGI Kids' Speech Corpus and Recognizers.* ICSLP 2000.
-
----
-
 ## 📊 Progress Tracker
 
 | Week | Dates | Activity | Status |
