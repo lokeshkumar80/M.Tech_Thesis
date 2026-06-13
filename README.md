@@ -35,7 +35,8 @@ Exploring self-supervised and weakly-supervised speech foundation models (Whispe
 - Filtering criteria: removal of utterances with transcription mismatches, very short segments, and high noise frames
 - Spoken by children ages 8-10; conversational dialogue with a virtual science tutor
 
-**Whisper Model Performance on MyST (Zero-shot WER %):**
+**Whisper Zero-shot WER% on MyST and OGI Test Sets:**
+*Source: Fan et al. 2024 [2] - Table 2*
 
 | Model | Params | MyST Test WER% | OGI Test WER% |
 |-------|--------|----------------|---------------|
@@ -46,14 +47,14 @@ Exploring self-supervised and weakly-supervised speech foundation models (Whispe
 | Whisper-large | 1.55B | 12.5 | 22.9 |
 | Whisper-large-v3 | 1.55B | 12.6 | 19.9 |
 
-**After Fine-tuning on Children's Data:**
+**After Fine-tuning on Children's Data (KID-Whisper paper, arXiv:2309.07927):**
 
-| Model | Fine-tune Data | MyST Test WER% |
-|-------|---------------|----------------|
-| Whisper-small | MyST 133h | ~8.2 |
-| Whisper-medium | MyST 133h | ~7.6 |
-| Whisper-large-v3 | MyST 133h | ~6.8 |
-| Canary 1B | MyST 133h | ~5.8 |
+| Model | Fine-tune Data | MyST Test WER% (zero-shot) | MyST Test WER% (fine-tuned) |
+|-------|---------------|---------------------------|------------------------------|
+| Whisper-small | MyST (KID-Whisper filtered) | 13.93% | **9.11%** |
+| Whisper-medium | MyST (KID-Whisper filtered) | 13.23% | **8.61%** |
+
+Note: KID-Whisper only fine-tuned and reported Small and Medium models. Large-v3 and Canary fine-tuning results are from Fan et al. 2024 (arXiv:2406.10507) which reports Whisper-largeV3 encoder fine-tuning at ~9.0-9.2% WER on MyST test. Canary 1B is reported zero-shot only (9.5%) in Fan et al. 2024 - no fine-tuned Canary result on MyST is publicly available.
 
 **Key Observations:**
 - Larger Whisper models do NOT always give best zero-shot children's WER (large vs large-v3 reversal on MyST)
@@ -73,6 +74,7 @@ Exploring self-supervised and weakly-supervised speech foundation models (Whispe
 - Pre-training: contrastive loss on masked latent representations
 
 **XLSR-53 vs XLS-R Comparison:**
+*Sources: Conneau et al. 2021 [3] (XLSR-53), Babu et al. 2022 [4] (XLS-R)*
 
 | Property | XLSR-53 | XLS-R 0.3B | XLS-R 1B | XLS-R 2B |
 |----------|---------|------------|----------|----------|
@@ -86,6 +88,7 @@ Exploring self-supervised and weakly-supervised speech foundation models (Whispe
 | LS test-clean WER% | ~3.9 | ~4.4 | ~2.8 | ~2.7 |
 
 **Pre-training Datasets:**
+*Sources: Conneau et al. 2021 [3], Babu et al. 2022 [4], Ardila et al. 2020 [5], Pratap et al. 2020 [6], Wang et al. 2021 [7], Valk & Alumae 2021 [8]*
 
 | Dataset | XLSR-53 | XLS-R | Hours | Hindi? |
 |---------|---------|-------|-------|--------|
@@ -98,6 +101,7 @@ Exploring self-supervised and weakly-supervised speech foundation models (Whispe
 | **Hindi in pre-training?** | **❌ No** | **✅ Yes (VoxLingua107)** | | |
 
 **English-only Alternatives (for English-only tasks):**
+*Source: Babu et al. 2022 [4] - Table 3*
 
 | Model | Pre-train Data | Hours | LS test-clean WER% |
 |-------|---------------|-------|---------------------|
@@ -118,27 +122,43 @@ Exploring self-supervised and weakly-supervised speech foundation models (Whispe
 
 #### 🗂️ MyST Corpus Filtering (KID-Whisper Methodology)
 
-Applied KID-Whisper filtering pipeline on LDC2021S05 - test split results:
+Applied KID-Whisper filtering pipeline on LDC2021S05 - test split results (cross-verified against raw data):
 
-| Filter Step | Removed | Remaining |
-|---|---|---|
-| Raw .flac files | - | 22,592 |
-| No transcription | -9,412 | 13,180 |
-| Flagged WER > 50% | -1,084 | 12,096 |
-| Non-speech tags | -380 | 11,716 |
-| < 3 words | -1,318 | 10,398 |
-| **KEPT** | - | **10,398 utterances (26.1h)** |
+| Filter Step | Removed | Remaining | Verified |
+|---|---|---|---|
+| Raw .flac files | - | 22,592 | ✅ |
+| No transcription | -9,412 | 13,180 | ✅ |
+| Flagged WER > 53% (FP16 adjusted) | -1,067 | 12,113 | ✅ |
+| Non-speech tags (`<DISCARD>`, `<SILENCE>`, `<NO_SIGNAL>`) | -380 | 11,733 | ✅ |
+| < 3 words (after tag stripping) | -1,318 | 10,415 | ✅ |
+| **KEPT** | - | **10,415 utterances (26.1h)** | ✅ |
 
-- Built utterance-level manifests: train 76,992 / dev 12,261 / test 12,752 paired flac+trn
-- Concatenated filtered utterances into 30-second chunks for Whisper inference: 3,972 test chunks
+**Note on flagging threshold:** KID-Whisper paper uses 50% WER threshold with full-precision Whisper-Large. We run Whisper-Large in FP16 (8GB VRAM constraint), which produces slightly higher WER on borderline files. Threshold adjusted to 53% to match paper's reported 83-84 minutes of removed audio (our result: 83.4 minutes). Script: `scripts/clean_whisper_large_flags.py`
+
+**Note on non-speech filtering:** Only files where the entire transcription is one of three exact tags (`<DISCARD>`, `<SILENCE>`, `<NO_SIGNAL>`) are removed. Files containing tags within speech (e.g. `<BREATH>`, `<LAUGH>`) have tags stripped but are kept. Word count filter runs on cleaned text after stripping.
+
+- Filtered utterance counts (flac+trn pairs, verified):
+
+| Split | Files | Duration | Filters Applied |
+|---|---|---|---|
+| train | 59,842 | 160.15h | no-trn, non-speech, <3 words only |
+| development | 9,567 | 23.98h | no-trn, non-speech, <3 words only |
+| test | 10,415 | 26.12h | all 4 filters including WER > 53% flagging |
+
+- WER-based flagging (Filter 2) was only applied to test split - `preprocess_myst.py` ran with `PARTITIONS = ["test"]`
+- KID-Whisper paper reports train 133h / dev 21h after full 4-filter pipeline on all splits - difference is due to missing flagging step on train/dev
+- WER flagging for train and dev to be applied before fine-tuning phase (estimated ~8h compute for train)
+- Concatenated filtered test utterances into 30-second chunks for Whisper inference: 3,972 chunks
+- `myst_train_text.txt` contains 59,842 lines - matches filtered train count exactly (cross-verified)
 
 #### 🧪 Baseline Experiments - Whisper Large-v3 Zero-shot on Filtered MyST Test
+*Our experiments - hardware: RTX 4060 8GB | normalizer: EnglishTextNormalizer (whisper_normalizer package) | evaluation script: calculate_wer.py*
 
 | Decoding | Chunks | WER% | Inference Time | Notes |
 |---|---|---|---|---|
-| Greedy | 3,972 | 15.31% | 33.5 min | No LM |
-| **Beam-5** | **3,972** | **14.46%** | **129.2 min** | **Official thesis baseline** |
-| Beam-5 + GPT-2 LM (KID-Whisper paper) | - | 12.6% | - | Includes shallow fusion |
+| Greedy | 3,972 | 15.31% | 33.5 min | No LM - our result |
+| **Beam-5** | **3,972** | **14.46%** | **129.2 min** | **Official thesis baseline - our result** |
+| Beam-5 + GPT-2 LM | - | 12.6% | - | KID-Whisper paper [1] - includes shallow fusion |
 
 > **🎯 Official Thesis Baseline: WER = 14.46%**
 > Model: Whisper Large-v3 | Decoding: Beam-5 | Corpus: MyST test (filtered) | Normalizer: EnglishTextNormalizer | Hardware: RTX 4060 8GB
@@ -170,9 +190,9 @@ Kid_Whisper_ASR/
 ├── data/
 │   ├── raw/                      ← Original MyST utterances (LDC2021S05)
 │   ├── filtered/                 ← KID-Whisper filtered splits
-│   │   ├── train/                ← 76,992 utterances
-│   │   ├── development/          ← 12,261 utterances
-│   │   └── test/                 ← 10,398 utterances (26.1h)
+│   │   ├── train/                ← 59,842 utterances (160.15h, 3 filters applied)
+│   │   ├── development/          ← 9,567 utterances (23.98h, 3 filters applied)
+│   │   └── test/                 ← 10,415 utterances (26.12h, all 4 filters applied)
 │   ├── concatenated/             ← 30-second chunks for Whisper inference
 │   │   └── test/                 ← 3,972 chunks
 │   └── myst_train_text.txt       ← Training transcriptions (59,842 lines)
@@ -198,6 +218,25 @@ Kid_Whisper_ASR/
 |------|----------|--------|
 | Week 1 | Literature survey: KID-Whisper, XLSR, XLS-R, MyST & CSLU datasets. GitHub repo setup. | ✅ Done |
 | Week 2 | MyST corpus filtering (KID-Whisper methodology), baseline WER = 14.46% confirmed, evaluation pipeline built. | ✅ Done |
+
+---
+
+## 🔖 References
+
+| # | Citation |
+|---|---|
+| [1] | Attia, A. A., Liu, J., Ai, W., Demszky, D., & Espy-Wilson, C. (2024). *KID-Whisper: Towards Bridging the Performance Gap in ASR for Children VS. Adults.* arXiv:2309.07927. |
+| [2] | Fan, R., Zheng, R., & Alwan, A. (2024). *Benchmarking Children's ASR with Supervised and Self-supervised Speech Foundation Models.* Interspeech 2024. arXiv:2406.10507. |
+| [3] | Conneau, A., et al. (2021). *Unsupervised Cross-lingual Representation Learning for Speech Recognition.* Interspeech 2021. arXiv:2006.13979. |
+| [4] | Babu, A., et al. (2022). *XLS-R: Self-supervised Cross-lingual Speech Representation Learning at Scale.* Interspeech 2022. arXiv:2111.09296. |
+| [5] | Ardila, R., et al. (2020). *Common Voice: A Massively-Multilingual Speech Corpus.* LREC 2020. |
+| [6] | Pratap, V., et al. (2020). *MLS: A Large-Scale Multilingual Dataset for Speech Research.* Interspeech 2020. |
+| [7] | Wang, C., et al. (2021). *VoxPopuli: A Large-scale Multilingual Speech Corpus.* ACL 2021. |
+| [8] | Valk, J., & Alumae, T. (2021). *VoxLingua107: a Dataset for Spoken Language Recognition.* SLT 2021. |
+| [9] | Baevski, A., Zhou, Y., Mohamed, A., & Auli, M. (2020). *wav2vec 2.0: A Framework for Self-supervised Learning of Speech Representations.* NeurIPS 2020. arXiv:2006.11477. |
+| [10] | Radford, A., et al. (2023). *Robust Speech Recognition via Large-Scale Weak Supervision.* ICML 2023. arXiv:2212.04356. |
+| [11] | Ward, W., Cole, R., & Pradhan, S. (2016). *My Science Tutor - Learning Science with a Conversational Virtual Tutor.* ACL 2016 System Demonstrations. |
+| [12] | Shobaki, K., Hosom, J. P., & Cole, R. A. (2000). *The OGI Kids' Speech Corpus and Recognizers.* ICSLP 2000. |
 
 ---
 
