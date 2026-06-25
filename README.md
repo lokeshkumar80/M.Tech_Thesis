@@ -171,12 +171,47 @@ Applied KID-Whisper filtering pipeline on LDC2021S05 - test split results (cross
 
 ---
 
-## 📊 Experiment Results
+### ✅ Week 3 | Compression Experiments
 
-| # | Model | Method | Dataset | WER% | Size |
-|---|-------|--------|---------|------|------|
-| B-1 | Whisper Large-v3 | Zero-shot, Greedy | MyST test (filtered) | 15.31% | 1.55B / 3.1GB FP16 |
-| B-2 | Whisper Large-v3 | Zero-shot, Beam-5 | MyST test (filtered) | **14.46%** | 1.55B / 3.1GB FP16 |
+#### 🔬 Quantization Methods Studied
+
+All quantization applied post-training (PTQ) to Whisper Large-v3 using bitsandbytes library. Evaluated on the same filtered MyST test set (3,972 chunks) with Beam-5 decoding and EnglishTextNormalizer.
+
+**Quantization Results:**
+*Our experiments - all methods use bitsandbytes PTQ, no fine-tuning applied*
+
+| Method | Quantization Scheme | WER% | Size | RTF | vs Baseline |
+|---|---|---|---|---|---|
+| FP16 (baseline) | Half-precision float | 14.46% | 3.10 GB | 0.125 | - |
+| INT8 - LLM.int8() [1] | Absmax INT8 + FP16 outlier cols | 14.60% | 1.51 GB | 0.145 | +0.14% |
+| NF4 4-bit - QLoRA [2] | Normal float quantile grid + double quant | 14.48% | 0.82 GB | 0.098 | +0.02% |
+| **FP4 4-bit** | Floating point 4-bit format | **14.05%** | **0.82 GB** | **0.098** | **-0.41%** |
+
+**Layer Pruning Results (no LoRA recovery):**
+*Source: Our experiments*
+
+| Method | Encoder Layers | WER% | Size | RTF | vs Baseline |
+|---|---|---|---|---|---|
+| FP16 (baseline) | 32/32 | 14.46% | 3.10 GB | 0.125 | - |
+| Pruning 2L | 30/32 | 623.19% | 2.80 GB | 0.575 | +608.73% |
+
+#### 💡 Key Findings (Week 3)
+
+- All three quantization methods (INT8, NF4, FP4) preserve WER within 0.5% of FP16 baseline while reducing model size by 51-73%
+- NF4 outperforms INT8 despite using half the bits - quantile-based grid preserves more information for normally-distributed weights (Dettmers et al. 2023 [2])
+- FP4 produces the best WER (14.05%) - 0.41% better than FP16 baseline - quantization noise appears to act as implicit regularization on this test set
+- INT8 is slower than FP16 on RTX 4060 (RTF 0.145 vs 0.125) - INT8 acceleration requires dedicated tensor cores found only in data center GPUs (A100, H100)
+- NF4 and FP4 are faster than FP16 (RTF 0.098) - reduced memory bandwidth compensates for dequantization overhead on consumer GPU
+- Naive layer pruning without recovery is catastrophic - removing just 2 of 32 encoder layers causes 623% WER, motivating LoRA recovery as the next phase
+
+| # | Model | Method | Dataset | WER% | Size | RTF | Notes |
+|---|-------|--------|---------|------|------|-----|-------|
+| B-1 | Whisper Large-v3 | Zero-shot, Greedy | MyST test (filtered) | 15.31% | 3.10 GB FP16 | 0.031 | Our result |
+| B-2 | Whisper Large-v3 | Zero-shot, Beam-5 | MyST test (filtered) | **14.46%** | 3.10 GB FP16 | 0.125 | **Official baseline** |
+| C-1 | Whisper Large-v3 | INT8 Quantization (LLM.int8()) | MyST test (filtered) | 14.60% | 1.51 GB | 0.145 | +0.14% WER, -51% size |
+| C-2 | Whisper Large-v3 | NF4 4-bit (bitsandbytes) | MyST test (filtered) | 14.48% | 0.82 GB | 0.098 | +0.02% WER, -73% size |
+| C-3 | Whisper Large-v3 | FP4 4-bit (bitsandbytes) | MyST test (filtered) | **14.05%** | 0.82 GB | 0.098 | **-0.41% WER, -73% size** |
+| C-4 | Whisper Large-v3 | Layer Pruning 2L (no recovery) | MyST test (filtered) | 623.19% | 2.80 GB | 0.575 | Catastrophic - motivates LoRA recovery |
 
 ---
 
@@ -218,6 +253,7 @@ Kid_Whisper_ASR/
 |------|----------|--------|
 | Week 1 | Literature survey: KID-Whisper, XLSR, XLS-R, MyST & CSLU datasets. GitHub repo setup. | ✅ Done |
 | Week 2 | MyST corpus filtering (KID-Whisper methodology), baseline WER = 14.46% confirmed, evaluation pipeline built. | ✅ Done |
+| Week 3 | Compression experiments: INT8 (14.60%), NF4 (14.48%), FP4 (14.05%), Layer pruning 2L (623.19%). Quantization analysis complete. | ✅ Done |
 
 ---
 
@@ -237,7 +273,9 @@ Kid_Whisper_ASR/
 | [10] | Radford, A., et al. (2023). *Robust Speech Recognition via Large-Scale Weak Supervision.* ICML 2023. arXiv:2212.04356. |
 | [11] | Ward, W., Cole, R., & Pradhan, S. (2016). *My Science Tutor - Learning Science with a Conversational Virtual Tutor.* ACL 2016 System Demonstrations. |
 | [12] | Shobaki, K., Hosom, J. P., & Cole, R. A. (2000). *The OGI Kids' Speech Corpus and Recognizers.* ICSLP 2000. |
+| [13] | Dettmers, T., Lewis, M., Belkada, Y., & Zettlemoyer, L. (2022). *LLM.int8(): 8-bit Matrix Multiplication for Transformers at Scale.* NeurIPS 2022. arXiv:2208.07339. |
+| [14] | Dettmers, T., Pagnoni, A., Holtzman, A., & Zettlemoyer, L. (2023). *QLoRA: Efficient Finetuning of Quantized LLMs.* NeurIPS 2023. arXiv:2305.14314. |
 
 ---
 
-*Last updated: Week 2*
+*Last updated: Week 3*
