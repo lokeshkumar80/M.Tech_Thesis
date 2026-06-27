@@ -173,45 +173,87 @@ Applied KID-Whisper filtering pipeline on LDC2021S05 - test split results (cross
 
 ### ✅ Week 3 | Compression Experiments
 
-#### 🔬 Quantization Methods Studied
+#### 🔬 Part A - bitsandbytes Quantization (Black-box baseline)
 
-All quantization applied post-training (PTQ) to Whisper Large-v3 using bitsandbytes library. Evaluated on the same filtered MyST test set (3,972 chunks) with Beam-5 decoding and EnglishTextNormalizer.
+All methods applied post-training to Whisper Large-v3. Beam-5 decoding, EnglishTextNormalizer, full test set (3,972 chunks).
+*Source: Our experiments using bitsandbytes library (Dettmers et al. 2022 [13], 2023 [14])*
 
-**Quantization Results:**
-*Our experiments - all methods use bitsandbytes PTQ, no fine-tuning applied*
-
-| Method | Quantization Scheme | WER% | Size | RTF | vs Baseline |
+| Method | Scheme | WER% | Size | RTF | vs Baseline |
 |---|---|---|---|---|---|
-| FP16 (baseline) | Half-precision float | 14.46% | 3.10 GB | 0.125 | - |
-| INT8 - LLM.int8() [1] | Absmax INT8 + FP16 outlier cols | 14.60% | 1.51 GB | 0.145 | +0.14% |
-| NF4 4-bit - QLoRA [2] | Normal float quantile grid + double quant | 14.48% | 0.82 GB | 0.098 | +0.02% |
-| **FP4 4-bit** | Floating point 4-bit format | **14.05%** | **0.82 GB** | **0.098** | **-0.41%** |
+| FP16 (reference) | Half-precision float | 14.46% | 2.87 GB | 0.125 | - |
+| INT8 - LLM.int8() | Absmax + FP16 outlier cols | 14.60% | 1.51 GB | 0.145 | +0.14% |
+| NF4 4-bit | Normal float quantile grid | 14.48% | 0.82 GB | 0.098 | +0.02% |
+| FP4 4-bit | Float point 4-bit format | **14.05%** | 0.82 GB | 0.098 | -0.41% |
 
-**Layer Pruning Results (no LoRA recovery):**
-*Source: Our experiments*
+#### 🔬 Part B - Our PyTorch Absmax Per-Channel PTQ (Thesis Contribution)
+
+Implemented from scratch in pure PyTorch. Same method across all bit widths - only the quantization range changes. 513 Linear layers quantized (99.5% of all parameters). Weights stored as int8 in all cases; theoretical sizes assume native N-bit packing.
+*Source: Our implementation - scripts/10_ptq_int8_pytorch.py, scripts/11_ptq_unified.py*
+
+| Bits | Levels | WER% | Actual Size | Theoretical Size | Reduction | Eval Set |
+|---|---|---|---|---|---|---|
+| 16 (FP16) | 65,536 | 14.46% | 2.87 GB | 2.87 GB | - | Full (3,972) |
+| 8 (INT8) | 255 | 14.48% | 1.57 GB | 1.57 GB | -45.3% | Full (3,972) |
+| 4 (INT4) | 15 | 620.91% | 1.57 GB | 0.73 GB | -74.5% | Full (3,972) |
+| 2 (INT2) | 3 | 100.00% | 1.57 GB | 0.38 GB | -86.9% | 200 samples |
+| 1 (Binary)| 2 | 100.00% | 1.57 GB | 0.20 GB | -93.1% | 200 samples |
+
+#### 🔬 Part C - Layer Pruning (no recovery)
+
+Removed last N layers from Whisper Large-v3 encoder (32 layers total). Decoder untouched.
+*Source: Our experiments - scripts/07_compress_pruning.py*
 
 | Method | Encoder Layers | WER% | Size | RTF | vs Baseline |
 |---|---|---|---|---|---|
-| FP16 (baseline) | 32/32 | 14.46% | 3.10 GB | 0.125 | - |
+| FP16 (reference) | 32/32 | 14.46% | 2.87 GB | 0.125 | - |
 | Pruning 2L | 30/32 | 623.19% | 2.80 GB | 0.575 | +608.73% |
 
 #### 💡 Key Findings (Week 3)
 
-- All three quantization methods (INT8, NF4, FP4) preserve WER within 0.5% of FP16 baseline while reducing model size by 51-73%
-- NF4 outperforms INT8 despite using half the bits - quantile-based grid preserves more information for normally-distributed weights (Dettmers et al. 2023 [2])
-- FP4 produces the best WER (14.05%) - 0.41% better than FP16 baseline - quantization noise appears to act as implicit regularization on this test set
-- INT8 is slower than FP16 on RTX 4060 (RTF 0.145 vs 0.125) - INT8 acceleration requires dedicated tensor cores found only in data center GPUs (A100, H100)
-- NF4 and FP4 are faster than FP16 (RTF 0.098) - reduced memory bandwidth compensates for dequantization overhead on consumer GPU
-- Naive layer pruning without recovery is catastrophic - removing just 2 of 32 encoder layers causes 623% WER, motivating LoRA recovery as the next phase
+- **8-bit is the minimum viable bit width for absmax linear quantization on Whisper** - below 8-bit the model fails completely. 4-bit hallucinates (WER 620%), 2-bit and 1-bit produce empty transcriptions (WER 100%, Matches 0/200)
+- **Quantization scheme matters more than bit width** - bitsandbytes NF4 at 4-bit (WER 14.48%) outperforms our linear INT4 at 4-bit (WER 620.91%) by placing quantization levels at the quantiles of the normal weight distribution rather than equally spaced
+- **Our INT8 (14.48%) outperforms bitsandbytes INT8 (14.60%)** - per-channel absmax scaling preserves more information than bitsandbytes vector-wise scaling for this task, and is 30% faster (RTF 0.101 vs 0.145) on consumer GPU
+- **FP4 produces best overall result (14.05%)** - 0.41% better than FP16 baseline, suggesting quantization noise acts as mild regularization on this test set
+- **Naive layer pruning is catastrophic** - removing just 2 of 32 encoder layers causes 623% WER, motivating LoRA recovery as the next phase
+- **2-bit and 1-bit failure modes differ from 4-bit** - 4-bit hallucinates (decoder runs to token limit), 2-bit/1-bit collapse weights to zero (decoder produces empty outputs)
 
-| # | Model | Method | Dataset | WER% | Size | RTF | Notes |
-|---|-------|--------|---------|------|------|-----|-------|
-| B-1 | Whisper Large-v3 | Zero-shot, Greedy | MyST test (filtered) | 15.31% | 3.10 GB FP16 | 0.031 | Our result |
-| B-2 | Whisper Large-v3 | Zero-shot, Beam-5 | MyST test (filtered) | **14.46%** | 3.10 GB FP16 | 0.125 | **Official baseline** |
-| C-1 | Whisper Large-v3 | INT8 Quantization (LLM.int8()) | MyST test (filtered) | 14.60% | 1.51 GB | 0.145 | +0.14% WER, -51% size |
-| C-2 | Whisper Large-v3 | NF4 4-bit (bitsandbytes) | MyST test (filtered) | 14.48% | 0.82 GB | 0.098 | +0.02% WER, -73% size |
-| C-3 | Whisper Large-v3 | FP4 4-bit (bitsandbytes) | MyST test (filtered) | **14.05%** | 0.82 GB | 0.098 | **-0.41% WER, -73% size** |
-| C-4 | Whisper Large-v3 | Layer Pruning 2L (no recovery) | MyST test (filtered) | 623.19% | 2.80 GB | 0.575 | Catastrophic - motivates LoRA recovery |
+## 📊 Experiment Results
+
+### Baselines - Whisper Large-v3, MyST Test Set (filtered, 3,972 chunks)
+*Source: Our experiments*
+
+| # | Method | WER% | Size | RTF |
+|---|--------|------|------|-----|
+| B-1 | Zero-shot Greedy | 15.31% | 2.87 GB FP16 | 0.031 |
+| **B-2** | **Zero-shot Beam-5 (official baseline)** | **14.46%** | **2.87 GB FP16** | **0.125** |
+
+### bitsandbytes PTQ - MyST Test Set (full, 3,972 chunks)
+*Source: Our experiments using Dettmers et al. 2022 [13] (INT8) and 2023 [14] (NF4, FP4)*
+
+| # | Method | WER% | Size | RTF | vs Baseline |
+|---|--------|------|------|-----|-------------|
+| C-1 | INT8 - LLM.int8() | 14.60% | 1.51 GB | 0.145 | +0.14% |
+| C-2 | NF4 4-bit | 14.48% | 0.82 GB | 0.098 | +0.02% |
+| C-3 | FP4 4-bit | **14.05%** | 0.82 GB | 0.098 | -0.41% |
+
+### Our PyTorch Absmax Per-Channel PTQ (thesis contribution)
+*Same method across all bit widths. 513 Linear layers quantized (99.5% of params). Weights stored as int8; theoretical sizes assume native N-bit packing.*
+*Source: Our implementation - scripts/10_ptq_int8_pytorch.py, scripts/11_ptq_unified.py*
+
+| # | Bits | Levels | WER% | Actual Size | Theoretical Size | Eval Set |
+|---|------|--------|------|-------------|-----------------|----------|
+| P-1 | 16 (FP16) | 65,536 | 14.46% | 2.87 GB | 2.87 GB | Full (3,972) |
+| P-2 | 8 (INT8) | 255 | 14.48% | 1.57 GB | 1.57 GB | Full (3,972) |
+| P-3 | 4 (INT4) | 15 | 620.91% | 1.57 GB | 0.73 GB | Full (3,972) |
+| P-4 | 2 (INT2) | 3 | 100.00% | 1.57 GB | 0.38 GB | 200 samples |
+| P-5 | 1 (Binary) | 2 | 100.00% | 1.57 GB | 0.20 GB | 200 samples |
+
+### Layer Pruning - no LoRA recovery
+*Source: Our experiments - scripts/07_compress_pruning.py*
+
+| # | Method | Encoder Layers | WER% | Size | vs Baseline |
+|---|--------|---------------|------|------|-------------|
+| L-1 | Pruning 2L | 30/32 | 623.19% | 2.80 GB | +608.73% |
 
 ---
 
@@ -253,7 +295,7 @@ Kid_Whisper_ASR/
 |------|----------|--------|
 | Week 1 | Literature survey: KID-Whisper, XLSR, XLS-R, MyST & CSLU datasets. GitHub repo setup. | ✅ Done |
 | Week 2 | MyST corpus filtering (KID-Whisper methodology), baseline WER = 14.46% confirmed, evaluation pipeline built. | ✅ Done |
-| Week 3 | Compression experiments: INT8 (14.60%), NF4 (14.48%), FP4 (14.05%), Layer pruning 2L (623.19%). Quantization analysis complete. | ✅ Done |
+| Week 3 | Full compression experiments: bitsandbytes PTQ (INT8/NF4/FP4), our PyTorch absmax PTQ (16/8/4/2/1-bit), layer pruning. Key finding: 8-bit is minimum viable for linear quantization; quantization scheme matters more than bit width. | ✅ Done |
 
 ---
 
