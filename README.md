@@ -208,12 +208,31 @@ Removed last N layers from Whisper Large-v3 encoder (32 layers total). Decoder u
 | FP16 (reference) | 32/32 | 14.46% | 2.87 GB | 0.125 | - |
 | Pruning 2L | 30/32 | 623.19% | 2.80 GB | 0.575 | +608.73% |
 
+#### 🔬 Part D - Calibrated Absmax PTQ (Our Extension - Thesis Contribution)
+
+Extends Part B with two calibration strategies to fix INT4 collapse. Same absmax per-channel method but with improved scale estimation.
+*Source: Our implementation - scripts/12_ptq_calibrated.py*
+
+**Strategy 1 - Percentile clipping (no calibration data):**
+Replace `max(|W|)` with `percentile(|W|, 99.9)` per output channel. Prevents single outlier weights from pulling the scale so wide that 99%+ of near-zero weights collapse to 0.
+
+**Strategy 2 - Activation-aware scaling (pending train filtering):**
+Combine weight percentile with actual MyST encoder activation statistics (alpha=0.5). Inspired by SmoothQuant (Xiao et al. 2022). Requires clean filtered train data - pending WER flagging on train/dev splits.
+
+| Method | Calib Data | WER% | Size | Eval Set | vs Naive INT4 |
+|---|---|---|---|---|---|
+| Naive INT4 (reference) | None | 620.91% | 1.57 GB | Full (3,972) | - |
+| Percentile INT4 (p=99.9) | None | **19.00%** | 1.57 GB | Full (3,972) | -601.91% |
+| Activation-aware INT4 (128 samples) | 128 MyST train utterances | - | 1.57 GB | Pending | - |
+
 #### 💡 Key Findings (Week 3)
 
 - **8-bit is the minimum viable bit width for absmax linear quantization on Whisper** - below 8-bit the model fails completely. 4-bit hallucinates (WER 620%), 2-bit and 1-bit produce empty transcriptions (WER 100%, Matches 0/200)
 - **Quantization scheme matters more than bit width** - bitsandbytes NF4 at 4-bit (WER 14.48%) outperforms our linear INT4 at 4-bit (WER 620.91%) by placing quantization levels at the quantiles of the normal weight distribution rather than equally spaced
 - **Our INT8 (14.48%) outperforms bitsandbytes INT8 (14.60%)** - per-channel absmax scaling preserves more information than bitsandbytes vector-wise scaling for this task, and is 30% faster (RTF 0.101 vs 0.145) on consumer GPU
 - **FP4 produces best overall result (14.05%)** - 0.41% better than FP16 baseline, suggesting quantization noise acts as mild regularization on this test set
+- **Percentile clipping alone recovers 97% of INT4 collapse** - naive INT4 at 620.91% drops to 19.00% by simply replacing max(|W|) with 99.9th percentile - no calibration data required
+- **Activation-aware INT4 pending** - requires properly filtered train data (WER flagging on train/dev splits not yet applied)
 - **Naive layer pruning is catastrophic** - removing just 2 of 32 encoder layers causes 623% WER, motivating LoRA recovery as the next phase
 - **2-bit and 1-bit failure modes differ from 4-bit** - 4-bit hallucinates (decoder runs to token limit), 2-bit/1-bit collapse weights to zero (decoder produces empty outputs)
 
@@ -255,6 +274,15 @@ Removed last N layers from Whisper Large-v3 encoder (32 layers total). Decoder u
 |---|--------|---------------|------|------|-------------|
 | L-1 | Pruning 2L | 30/32 | 623.19% | 2.80 GB | +608.73% |
 
+### Calibrated Absmax PTQ - INT4 Recovery (thesis contribution)
+*Extends our PyTorch PTQ with improved scale estimation. No retraining required.*
+*Source: Our implementation - scripts/12_ptq_calibrated.py*
+
+| # | Method | Calib Data | WER% | Size | Eval Set | vs Naive INT4 |
+|---|--------|-----------|------|------|----------|---------------|
+| CA-1 | Percentile INT4 (p=99.9) | None | **19.00%** | 1.57 GB | Full (3,972) | -601.91% |
+| CA-2 | Activation-aware INT4 (alpha=0.5) | 128 MyST utterances | - | 1.57 GB | Pending | - |
+
 ---
 
 ## 🗂️ Repository Structure
@@ -274,12 +302,19 @@ Kid_Whisper_ASR/
 │   │   └── test/                 ← 3,972 chunks
 │   └── myst_train_text.txt       ← Training transcriptions (59,842 lines)
 ├── scripts/
-│   ├── preprocess_myst.py
-│   ├── generate_whisper_large_flags.py
-│   ├── clean_whisper_large_flags.py
-│   ├── train_gpt2_myst.py
+│   ├── preprocess_myst.py               ← Phase 1+2: filter raw data and concatenate
+│   ├── generate_whisper_large_flags.py  ← Run Whisper-Large zero-shot for WER flagging
+│   ├── clean_whisper_large_flags.py     ← Apply 53% threshold to flagging output
+│   ├── train_gpt2_myst.py               ← GPT-2 shallow fusion LM training
 │   ├── test_shallow_fusion_quick.py
-│   └── 04_inference_filtered_myst.py ← Whisper inference (beam/greedy)
+│   ├── 04_inference_filtered_myst.py    ← Whisper FP16 inference (beam/greedy)
+│   ├── 05_compress_int8.py              ← bitsandbytes INT8 quantization
+│   ├── 06_compress_nf4.py               ← bitsandbytes NF4 4-bit quantization
+│   ├── 07_compress_pruning.py           ← Encoder layer pruning (2/4/6/8 layers)
+│   ├── 09_compress_fp4.py               ← bitsandbytes FP4 4-bit quantization
+│   ├── 10_ptq_int8_pytorch.py           ← Our PyTorch absmax INT8 PTQ
+│   ├── 11_ptq_unified.py                ← Our PyTorch absmax PTQ (any bit width)
+│   └── 12_ptq_calibrated.py             ← Calibrated PTQ (percentile + activation-aware)
 ├── experiments/
 │   ├── predictions_*.txt         ← Raw inference outputs
 │   ├── *_normalized.txt          ← Normalized GT + prediction pairs
@@ -295,7 +330,7 @@ Kid_Whisper_ASR/
 |------|----------|--------|
 | Week 1 | Literature survey: KID-Whisper, XLSR, XLS-R, MyST & CSLU datasets. GitHub repo setup. | ✅ Done |
 | Week 2 | MyST corpus filtering (KID-Whisper methodology), baseline WER = 14.46% confirmed, evaluation pipeline built. | ✅ Done |
-| Week 3 | Full compression experiments: bitsandbytes PTQ (INT8/NF4/FP4), our PyTorch absmax PTQ (16/8/4/2/1-bit), layer pruning. Key finding: 8-bit is minimum viable for linear quantization; quantization scheme matters more than bit width. | ✅ Done |
+| Week 3 | bitsandbytes PTQ (INT8/NF4/FP4), our PyTorch absmax PTQ (16/8/4/2/1-bit), layer pruning, calibrated PTQ (percentile INT4 = 19.00%). Key finding: scheme matters more than bit width; percentile clipping recovers 97% of INT4 collapse. | ✅ Done |
 
 ---
 
@@ -317,6 +352,7 @@ Kid_Whisper_ASR/
 | [12] | Shobaki, K., Hosom, J. P., & Cole, R. A. (2000). *The OGI Kids' Speech Corpus and Recognizers.* ICSLP 2000. |
 | [13] | Dettmers, T., Lewis, M., Belkada, Y., & Zettlemoyer, L. (2022). *LLM.int8(): 8-bit Matrix Multiplication for Transformers at Scale.* NeurIPS 2022. arXiv:2208.07339. |
 | [14] | Dettmers, T., Pagnoni, A., Holtzman, A., & Zettlemoyer, L. (2023). *QLoRA: Efficient Finetuning of Quantized LLMs.* NeurIPS 2023. arXiv:2305.14314. |
+| [15] | Xiao, G., Lin, J., Seznec, M., Wu, H., Demouth, J., & Han, S. (2023). *SmoothQuant: Accurate and Efficient Post-Training Quantization for Large Language Models.* ICML 2023. arXiv:2211.10438. |
 
 ---
 
