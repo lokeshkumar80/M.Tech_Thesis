@@ -139,15 +139,15 @@ Applied KID-Whisper filtering pipeline on LDC2021S05 - test split results (cross
 
 - Filtered utterance counts (flac+trn pairs, verified):
 
-| Split | Files | Duration | Filters Applied |
-|---|---|---|---|
-| train | 59,842 | 160.15h | no-trn, non-speech, <3 words only |
-| development | 9,567 | 23.98h | no-trn, non-speech, <3 words only |
-| test | 10,415 | 26.12h | all 4 filters including WER > 53% flagging |
+| Split | Files | Duration | Filters Applied | Status |
+|---|---|---|---|---|
+| train | 57,687 | 136.9h | all 4 filters + >30s removal | ✅ Final |
+| development | 9,017 | 21.1h | all 4 filters + >30s removal | ✅ Final |
+| test | 10,415 | 26.12h | all 4 filters + >30s removal (via chunking) | ✅ Final |
 
-- WER-based flagging (Filter 2) was only applied to test split - `preprocess_myst.py` ran with `PARTITIONS = ["test"]`
-- KID-Whisper paper reports train 133h / dev 21h after full 4-filter pipeline on all splits - difference is due to missing flagging step on train/dev
-- WER flagging for train and dev to be applied before fine-tuning phase (estimated ~8h compute for train)
+- WER flagging applied to all splits: train (2,823 flagged), dev (1,046 flagged), test (1,067 flagged) - scripts: `generate_flags_partition.py`, `clean_flags_partition.py`
+- Filter 5 (>30s removal) added to match KID-Whisper methodology - utterances longer than 30s removed since Whisper is trained on 30s windows
+- KID-Whisper reports train 132.5h / dev 21h - our results (136.9h / 21.1h) are close; remaining gap due to FP16 vs FP32 flagging difference
 - Concatenated filtered test utterances into 30-second chunks for Whisper inference: 3,972 chunks
 - `myst_train_text.txt` contains 59,842 lines - matches filtered train count exactly (cross-verified)
 
@@ -158,14 +158,14 @@ Applied KID-Whisper filtering pipeline on LDC2021S05 - test split results (cross
 |---|---|---|---|---|
 | Greedy | 3,972 | 15.31% | 33.5 min | No LM - our result |
 | **Beam-5** | **3,972** | **14.46%** | **129.2 min** | **Official thesis baseline - our result** |
-| Beam-5 + GPT-2 LM | - | 12.6% | - | KID-Whisper paper [1] - includes shallow fusion |
+| Zero-shot ref (Fan et al. 2024) [2] | - | 12.60% | - | arXiv:2406.10507, Table 2 - Whisper Large-v3 zero-shot, no LM |
 
 > **🎯 Official Thesis Baseline: WER = 14.46%**
 > Model: Whisper Large-v3 | Decoding: Beam-5 | Corpus: MyST test (filtered) | Normalizer: EnglishTextNormalizer | Hardware: RTX 4060 8GB
 
 #### 💡 Key Findings (Week 2)
 - Beam-5 gives 0.85% absolute WER improvement over greedy on children's speech
-- Remaining 1.86% gap to KID-Whisper paper is due to GPT-2 shallow fusion (LM rescoring)
+- 1.86% gap between our result (14.46%) and published reference (12.60%, Fan et al. 2024) is due to different filtering methodology and test set construction - NOT LM rescoring. KID-Whisper (arXiv:2309.07927) only reports up to Whisper Large-v2 and uses no GPT-2 LM in main results
 - Disfluency tokens (UH, UM) in MyST references inflate WER by ~4-5% if not normalized - EnglishTextNormalizer handles this correctly
 - RTF: greedy = 0.031 (32x real-time), beam-5 = 0.125 (8x real-time) on RTX 4060 8GB
 
@@ -211,19 +211,20 @@ Removed last N layers from Whisper Large-v3 encoder (32 layers total). Decoder u
 #### 🔬 Part D - Calibrated Absmax PTQ (Our Extension - Thesis Contribution)
 
 Extends Part B with two calibration strategies to fix INT4 collapse. Same absmax per-channel method but with improved scale estimation.
-*Source: Our implementation - scripts/12_ptq_calibrated.py*
+*Source: Our implementation - scripts/12_ptq_calibratedWithFP32.py*
 
 **Strategy 1 - Percentile clipping (no calibration data):**
 Replace `max(|W|)` with `percentile(|W|, 99.9)` per output channel. Prevents single outlier weights from pulling the scale so wide that 99%+ of near-zero weights collapse to 0.
 
-**Strategy 2 - Activation-aware scaling (pending train filtering):**
-Combine weight percentile with actual MyST encoder activation statistics (alpha=0.5). Inspired by SmoothQuant (Xiao et al. 2022). Requires clean filtered train data - pending WER flagging on train/dev splits.
+**Strategy 2 - Activation-aware scaling (calibration data required):**
+Combine weight percentile with actual MyST encoder activation statistics using smoothing factor alpha. Scale = `(weight_pct^(1-alpha) * act_pct^alpha) / max_val`. Inspired by SmoothQuant (Xiao et al. 2022 [15]). Tested with 128 filtered MyST train utterances (57,687 files / 136.9h after all 4 filters + >30s removal).
 
-| Method | Calib Data | WER% | Size | Eval Set | vs Naive INT4 |
-|---|---|---|---|---|---|
-| Naive INT4 (reference) | None | 620.91% | 1.57 GB | Full (3,972) | - |
-| Percentile INT4 (p=99.9) | None | **19.00%** | 1.57 GB | Full (3,972) | -601.91% |
-| Activation-aware INT4 (128 samples) | 128 MyST train utterances | - | 1.57 GB | Pending | - |
+| Method | Calib Data | Alpha | WER% | Size | Eval Set | vs Naive INT4 |
+|---|---|---|---|---|---|---|
+| Naive INT4 (reference) | None | - | 620.91% | 1.57 GB | Full (3,972) | - |
+| Percentile INT4 (p=99.9) | None | - | **19.00%** | 1.57 GB | Full (3,972) | -601.91% |
+| Act-aware INT4 (CA-2) | 128 MyST utterances | 0.5 | 100.00% | 1.57 GB | 200 samples | worse |
+| Act-aware INT4 (CA-3) | 128 MyST utterances | 0.1 | 392.36% | 1.57 GB | 200 samples | worse |
 
 #### 💡 Key Findings (Week 3)
 
@@ -232,7 +233,7 @@ Combine weight percentile with actual MyST encoder activation statistics (alpha=
 - **Our INT8 (14.48%) outperforms bitsandbytes INT8 (14.60%)** - per-channel absmax scaling preserves more information than bitsandbytes vector-wise scaling for this task, and is 30% faster (RTF 0.101 vs 0.145) on consumer GPU
 - **FP4 produces best overall result (14.05%)** - 0.41% better than FP16 baseline, suggesting quantization noise acts as mild regularization on this test set
 - **Percentile clipping alone recovers 97% of INT4 collapse** - naive INT4 at 620.91% drops to 19.00% by simply replacing max(|W|) with 99.9th percentile - no calibration data required
-- **Activation-aware INT4 pending** - requires properly filtered train data (WER flagging on train/dev splits not yet applied)
+- **Activation-aware scaling makes INT4 worse, not better** - children's speech produces large encoder activations (act_pct >> weight_pct). The geometric mean formula widens quantization scales rather than tightening them, pushing near-zero weights back to zero. Even alpha=0.1 gives 392.36% WER. The correct solution is NF4's quantile grid which places levels where weights actually exist, not relative to activation magnitude
 - **Naive layer pruning is catastrophic** - removing just 2 of 32 encoder layers causes 623% WER, motivating LoRA recovery as the next phase
 - **2-bit and 1-bit failure modes differ from 4-bit** - 4-bit hallucinates (decoder runs to token limit), 2-bit/1-bit collapse weights to zero (decoder produces empty outputs)
 
@@ -281,7 +282,8 @@ Combine weight percentile with actual MyST encoder activation statistics (alpha=
 | # | Method | Calib Data | WER% | Size | Eval Set | vs Naive INT4 |
 |---|--------|-----------|------|------|----------|---------------|
 | CA-1 | Percentile INT4 (p=99.9) | None | **19.00%** | 1.57 GB | Full (3,972) | -601.91% |
-| CA-2 | Activation-aware INT4 (alpha=0.5) | 128 MyST utterances | - | 1.57 GB | Pending | - |
+| CA-2 | Act-aware INT4 (alpha=0.5) | 128 MyST utterances | 100.00% | 1.57 GB | 200 samples | worse than percentile |
+| CA-3 | Act-aware INT4 (alpha=0.1) | 128 MyST utterances | 392.36% | 1.57 GB | 200 samples | worse than percentile |
 
 ---
 
@@ -295,8 +297,8 @@ Kid_Whisper_ASR/
 ├── data/
 │   ├── raw/                      ← Original MyST utterances (LDC2021S05)
 │   ├── filtered/                 ← KID-Whisper filtered splits
-│   │   ├── train/                ← 59,842 utterances (160.15h, 3 filters applied)
-│   │   ├── development/          ← 9,567 utterances (23.98h, 3 filters applied)
+│   │   ├── train/                ← 57,687 utterances (136.9h, all 4 filters + >30s removal)
+│   │   ├── development/          ← 9,017 utterances (21.1h, all 4 filters + >30s removal)
 │   │   └── test/                 ← 10,415 utterances (26.12h, all 4 filters applied)
 │   ├── concatenated/             ← 30-second chunks for Whisper inference
 │   │   └── test/                 ← 3,972 chunks
@@ -314,7 +316,7 @@ Kid_Whisper_ASR/
 │   ├── 09_compress_fp4.py               ← bitsandbytes FP4 4-bit quantization
 │   ├── 10_ptq_int8_pytorch.py           ← Our PyTorch absmax INT8 PTQ
 │   ├── 11_ptq_unified.py                ← Our PyTorch absmax PTQ (any bit width)
-│   └── 12_ptq_calibrated.py             ← Calibrated PTQ (percentile + activation-aware)
+│   └── 12_ptq_calibratedWithFP32.py      ← Calibrated PTQ (percentile + activation-aware, float32 fix)
 ├── experiments/
 │   ├── predictions_*.txt         ← Raw inference outputs
 │   ├── *_normalized.txt          ← Normalized GT + prediction pairs
@@ -330,7 +332,7 @@ Kid_Whisper_ASR/
 |------|----------|--------|
 | Week 1 | Literature survey: KID-Whisper, XLSR, XLS-R, MyST & CSLU datasets. GitHub repo setup. | ✅ Done |
 | Week 2 | MyST corpus filtering (KID-Whisper methodology), baseline WER = 14.46% confirmed, evaluation pipeline built. | ✅ Done |
-| Week 3 | bitsandbytes PTQ (INT8/NF4/FP4), our PyTorch absmax PTQ (16/8/4/2/1-bit), layer pruning, calibrated PTQ (percentile INT4 = 19.00%). Key finding: scheme matters more than bit width; percentile clipping recovers 97% of INT4 collapse. | ✅ Done |
+| Week 3 | Full compression suite: bitsandbytes PTQ (INT8/NF4/FP4), our PyTorch absmax PTQ (all bit widths), layer pruning, calibrated PTQ. Key findings: scheme > bit-width; percentile clipping recovers 97% of INT4 collapse (19.00%); activation-aware scaling makes it worse due to large children's speech activations. | ✅ Done |
 
 ---
 
@@ -356,4 +358,4 @@ Kid_Whisper_ASR/
 
 ---
 
-*Last updated: Week 3*
+*Last updated: Week 3 (complete)*
