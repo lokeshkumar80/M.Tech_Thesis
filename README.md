@@ -233,6 +233,7 @@ Combine weight percentile with actual MyST encoder activation statistics using s
 - **Our INT8 (14.48%) outperforms bitsandbytes INT8 (14.60%)** - per-channel absmax scaling preserves more information than bitsandbytes vector-wise scaling for this task, and is 30% faster (RTF 0.101 vs 0.145) on consumer GPU
 - **FP4 produces best overall result (14.05%)** - 0.41% better than FP16 baseline, suggesting quantization noise acts as mild regularization on this test set
 - **Percentile clipping alone recovers 97% of INT4 collapse** - naive INT4 at 620.91% drops to 19.00% by simply replacing max(|W|) with 99.9th percentile - no calibration data required
+- **Percentile clipping is effective only at 4-bit and above** - at 2-bit (3 levels), the binding constraint is level count not outliers. Even with p=99.9 clipping, ~40-50% of Whisper weights still round to 0 (empty output, WER 100%). Minimum viable bit width for percentile clipping on Whisper is 4-bit
 - **Activation-aware scaling makes INT4 worse, not better** - children's speech produces large encoder activations (act_pct >> weight_pct). The geometric mean formula widens quantization scales rather than tightening them, pushing near-zero weights back to zero. Even alpha=0.1 gives 392.36% WER. The correct solution is NF4's quantile grid which places levels where weights actually exist, not relative to activation magnitude
 - **Naive layer pruning is catastrophic** - removing just 2 of 32 encoder layers causes 623% WER, motivating LoRA recovery as the next phase
 - **2-bit and 1-bit failure modes differ from 4-bit** - 4-bit hallucinates (decoder runs to token limit), 2-bit/1-bit collapse weights to zero (decoder produces empty outputs)
@@ -284,6 +285,7 @@ Combine weight percentile with actual MyST encoder activation statistics using s
 | CA-1 | Percentile INT4 (p=99.9) | None | **19.00%** | 1.57 GB | Full (3,972) | -601.91% |
 | CA-2 | Act-aware INT4 (alpha=0.5) | 128 MyST utterances | 100.00% | 1.57 GB | 200 samples | worse than percentile |
 | CA-3 | Act-aware INT4 (alpha=0.1) | 128 MyST utterances | 392.36% | 1.57 GB | 200 samples | worse than percentile |
+| CA-4 | Percentile INT2 (p=99.9) | None | 100.00% | 1.57 GB | 200 samples | no improvement over naive INT2 |
 
 ---
 
@@ -332,7 +334,7 @@ Kid_Whisper_ASR/
 |------|----------|--------|
 | Week 1 | Literature survey: KID-Whisper, XLSR, XLS-R, MyST & CSLU datasets. GitHub repo setup. | ✅ Done |
 | Week 2 | MyST corpus filtering (KID-Whisper methodology), baseline WER = 14.46% confirmed, evaluation pipeline built. | ✅ Done |
-| Week 3 | Full compression suite: bitsandbytes PTQ (INT8/NF4/FP4), our PyTorch absmax PTQ (all bit widths), layer pruning, calibrated PTQ. Key findings: scheme > bit-width; percentile clipping recovers 97% of INT4 collapse (19.00%); activation-aware scaling makes it worse due to large children's speech activations. | ✅ Done |
+| Week 3 | Full compression suite: bitsandbytes PTQ (INT8/NF4/FP4), our PyTorch absmax PTQ (all bit widths), layer pruning, calibrated PTQ (percentile INT4=19%, percentile INT2=100%). Key findings: scheme > bit-width; percentile clipping effective only at 4-bit+; 4-bit is minimum viable with calibration; activation-aware scaling fails for children's speech. | ✅ Done |
 
 ---
 
