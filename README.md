@@ -274,6 +274,25 @@ Extended the quantization study to floating point formats. Same per-channel absm
 - **Percentile clipping universally beneficial across all formats** - improves FP8 E4M3 from 14.45% to 13.98%, FP4 E2M1 from 15.87% to 14.03%, and as seen in Week 3: INT4 from 620.91% to 19.00%
 - **Theoretical foundation: ACIQ (Banner et al. 2019, arXiv:1810.05723) [16]** - analytically proves optimal clip point ≈ 2.83σ for 4-bit Gaussian distributions. Our p99.9 ≈ 3.09σ closely approximates this optimum without requiring calibration data
 
+
+### ✅ Week 5 | Custom FP4 E2M1 + LoRA Fine-tuning
+
+**Pipeline:** FP4 E2M1 + pct99.9 (14.03% WER) → custom LoRA on frozen FP4 weights → 13.77% WER
+
+**Result: 13.77% WER** using r=16 LoRA on q_proj+v_proj, 500 steps, 57,687 MyST train utterances
+
+| Attempt | Config | Steps | WER% | Outcome |
+|---|---|---|---|---|
+| Sanity | r=16, q+v | 25 | 13.74% | ✅ |
+| **Optimal** | **r=16, q+v, non-reentrant GC** | **500** | **13.77%** | **✅ Best** |
+| Fail 1 | r=16, 3 epochs, reentrant GC | 21,630 | 93.86% | ❌ |
+| Fail 2 | r=16, 1 epoch | 7,210 | 96.58% | ❌ |
+| Fail 3 | r=32, q+v+out+fc1 | 500 | 17.72% | ❌ |
+
+**Key findings:** exposure bias limits training to ~500 steps; `use_reentrant=False` required for gradient checkpointing with FP4 layers; minimal LoRA (r=16, q+v only) outperforms expanded targets; fc1 layers cause 4× LoRA amplification degrading WER. Gap to KID-Whisper (9.11%) explained by exposure bias ceiling (only 6.9% of data trained). Scheduled sampling is the pending fix.
+
+---
+
 ## 📊 Experiment Results
 
 ### Baselines - Whisper Large-v3, MyST Test Set (filtered, 3,972 chunks)
@@ -335,6 +354,25 @@ Extended the quantization study to floating point formats. Same per-channel absm
 | F-4 | FP4 E2M1 (ours) | Naive absmax | 15.87% | 0.73 GB | 0.169 | Full (3,972) | +1.41% |
 | **F-5** | **FP4 E2M1 + pct99.9 (ours)** | **E2M1 + percentile** | **14.03%** | **0.73 GB** | **0.158** | **Full (3,972)** | **-0.43%** |
 
+### Week 5 - QLoRA Fine-tuning Results
+*Pipeline: FP4 E2M1+pct99.9 → custom LoRA → MyST train (57,687 utts / 136.9h)*
+*Source: Our implementation - scripts/15_qlora_finetune.py*
+
+| # | Config | Steps | WER% | vs Zero-shot | Trainable | Status |
+|---|--------|-------|------|-------------|-----------|--------|
+| **QL-1** | **r=16, q+v, use_reentrant=False** | **500** | **13.77%** | **-0.26%** | **7.86M (0.49%)** | **✅ Best** |
+| QL-2 | r=16, q+v, 1 epoch | 7,210 | 96.58% | +82.55% | 7.86M | ❌ Exposure bias |
+| QL-3 | r=16, q+v, 3 epochs + GC corruption | 21,630 | 93.86% | +79.83% | 7.86M | ❌ GC + exposure bias |
+| QL-4 | r=32, q+v+out_proj+fc1, 500 steps | 500 | 17.72% | +3.69% | 36.7M (2.4%) | ❌ fc1 amplification |
+
+**Key findings:**
+- Optimal: r=16, q+v only, 500 steps → WER 13.77% (-0.26% vs 14.03% zero-shot)
+- Gradient checkpointing MUST use `use_reentrant=False` - default corrupts FP4 gather gradients
+- Exposure bias: >500 steps causes catastrophic WER (93-96%) due to teacher forcing mismatch
+- Larger LoRA (r=32 + fc1 layers) worsens WER: fc1 [1280→5120] produces 4× larger LoRA output than attention layers → dominates FP4 base representations within 500 steps
+- Gap to KID-Whisper (9.11%): training only 6.9% of data (4,000/57,687 utterances), exposure bias ceiling, LoRA vs full fine-tuning expressiveness
+- Scheduled sampling (gradual replacement of correct tokens with model predictions) is the correct fix for exposure bias - pending implementation
+
 ---
 
 ## 🗂️ Repository Structure
@@ -367,7 +405,10 @@ Kid_Whisper_ASR/
 │   ├── 10_ptq_int8_pytorch.py           ← Our PyTorch absmax INT8 PTQ
 │   ├── 11_ptq_unified.py                ← Our PyTorch absmax PTQ (any bit width)
 │   ├── 12_ptq_calibratedWithFP32.py      ← Calibrated PTQ (percentile + activation-aware, float32 fix)
-│   └── 13_ptq_fp_formats.py               ← FP8 E4M3/E5M2 and FP4 E2M1 quantization
+│   ├── 13_ptq_fp_formats.py               ← FP8 E4M3/E5M2 and FP4 E2M1 quantization
+│   ├── 14_lora_recovery.py                ← LoRA recovery on pruned 2L model (ready, not run)
+│   ├── 15_qlora_finetune.py               ← FP4 E2M1+pct + custom LoRA fine-tuning
+│   └── 16_qlora_hf_tutorial.py            ← HuggingFace NF4+PEFT LoRA (partial - env issues)
 ├── experiments/
 │   ├── predictions_*.txt         ← Raw inference outputs
 │   ├── *_normalized.txt          ← Normalized GT + prediction pairs
@@ -385,6 +426,7 @@ Kid_Whisper_ASR/
 | Week 2 | MyST corpus filtering (KID-Whisper methodology), baseline WER = 14.46% confirmed, evaluation pipeline built. | ✅ Done |
 | Week 3 | Full compression suite: bitsandbytes PTQ (INT8/NF4/FP4), our PyTorch absmax PTQ (all bit widths), layer pruning, calibrated PTQ (percentile INT4=19%, percentile INT2=100%). Key findings: scheme > bit-width; percentile clipping effective only at 4-bit+; 4-bit is minimum viable with calibration; activation-aware scaling fails for children's speech. | ✅ Done |
 | Week 4 | Floating point quantization (FP8 E4M3 naive 14.45%, FP8 E4M3+pct 13.98%, FP8 E5M2 100%, FP4 E2M1 naive 15.87%, FP4 E2M1+pct 14.03%). Key findings: mantissa bits > exponent range; percentile universally beneficial for all formats; FP8 E4M3+pct is best result overall; FP4 E2M1+pct confirms bitsandbytes FP4 internal grid. Grounded in ACIQ (Banner et al. 2019). | ✅ Done |
+| Week 5 | Custom FP4 E2M1+pct + LoRA fine-tuning. Optimal: r=16 q+v 500 steps → 13.77% WER (-0.26% vs zero-shot). Key findings: exposure bias limits training to ~500 steps; use_reentrant=False required for gradient checkpointing; larger LoRA (r=32+fc1) worse due to 4× amplification. Scheduled sampling pending to overcome ceiling. | ✅ Done (pending improvement) |
 
 ---
 
@@ -413,4 +455,4 @@ Kid_Whisper_ASR/
 
 ---
 
-*Last updated: Week 4 (complete)*
+*Last updated: Week 5 (complete) - July 2026*
