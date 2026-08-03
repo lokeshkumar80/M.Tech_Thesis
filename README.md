@@ -293,6 +293,57 @@ Extended the quantization study to floating point formats. Same per-channel absm
 
 ---
 
+### ✅ Week 6 | KID-Whisper PTQ Compression Experiments
+
+**Approach:** Compress already-children-adapted KID-Whisper models (Attia et al. AAAI 2024, arXiv:2309.07927) using our PTQ methods. Tests whether quantization preserves domain-specific children's speech features.
+
+**Models:**
+- `aadel4/kid-whisper-small-myst` - whisper-small multilingual, 244M params, paper WER: 11.80%
+- `aadel4/kid-whisper-small-en-myst` - whisper-small.en English-only, 244M params, paper WER: 9.11%
+- `aadel4/kid-whisper-medium-en-myst` - whisper-medium.en English-only, 769M params, paper WER: 8.91%
+- `aadel4/kid-whisper-medium-myst` (8.61% best result) - NOT publicly available on HuggingFace
+
+**Key Finding:** Percentile clipping universally HURTS fine-tuned models (opposite of general models).
+Naive quantization preserves children's speech features. Rule: fine-tuned models → use naive only.
+
+#### KID-Whisper Small (aadel4/kid-whisper-small-myst) - Complete Results
+
+| # | Method | WER% | vs FP16 | Size | RTF | Status |
+|---|--------|------|---------|------|-----|--------|
+| KW-S-1 | FP16 baseline | 11.45% | — | 0.450 GB | 0.022 | ✅ Full |
+| **KW-S-2** | **INT8 naive (ours)** | **11.35%** | **-0.10%** | **0.303 GB** | **0.031** | **✅ Best** |
+| KW-S-3 | FP8 E4M3 naive (ours) | 11.75% | +0.30% | 0.303 GB | 0.031 | ✅ Full |
+| KW-S-4 | FP4 E2M1 naive (ours) | 11.79% | +0.34% | 0.303 GB | 0.044 | ✅ Full |
+| KW-S-5 | INT4 naive (ours) | 13.08% | +1.63% | 0.303 GB | 0.030 | ✅ Full |
+| KW-S-6 | INT8 pct99.9 (ours) | 15.96% | +4.51% | 0.303 GB | 0.032 | ✅ Full |
+| KW-S-7 | FP8 E4M3 pct99.9 (ours) | 16.84% | +5.39% | 0.303 GB | 0.033 | ✅ Full |
+| KW-S-8 | INT4 pct99.9 (ours) | 35.43% | +23.98% | 0.303 GB | 0.036 | ✅ Full |
+| KW-S-9 | FP4 E2M1 pct99.9 (ours) | 22.39% | +10.94% | 0.303 GB | 0.048 | ✅ Full |
+| KW-S-10 | INT2 naive (ours) | 100.00% | catastrophic | 0.303 GB | 0.201 | ✅ Full |
+| KW-S-11 | FP2 E1M0 naive (ours) | 713.72% | catastrophic | 0.303 GB | 0.317 | ✅ Full |
+| KW-S-12 | INT2/1 pct, FP1 naive/pct | ~100%+ | catastrophic | — | — | ⏭️ Skipped |
+| KW-S-13 | bitsandbytes INT8 | pending | — | — | — | 🔄 Running |
+| KW-S-14 | bitsandbytes NF4 | pending | — | — | — | ⏳ Pending |
+| KW-S-15 | bitsandbytes FP4 | pending | — | — | — | ⏳ Pending |
+
+#### Key Findings (Week 6 - KID-Whisper Small)
+
+- **INT8 naive is the best quantized method** (11.35%) - 0.10% better than FP16 (11.45%) while achieving 32.7% size reduction (0.45→0.30 GB). Domain regularization effect exists at INT8 too
+- **FP4 naive (11.79%) nearly matches FP8 naive (11.75%)** - only 0.04% gap despite halving bit width from 8 to 4. Exponential FP grid preserves fine-tuned children's speech features at 4-bit
+- **Minimum viable bit width: 4-bit** - INT4 naive (13.08%) is the minimum usable INT method. FP4 naive (11.79%) is far better at the same 4-bit count, proving exponential grid superiority
+- **Percentile clipping universally destroys fine-tuned model quality** across ALL formats and bit widths:
+  - INT8: naive 11.35% → pct 15.96% (+4.51%)
+  - FP8:  naive 11.75% → pct 16.84% (+5.39%)
+  - INT4: naive 13.08% → pct 35.43% (+22.35%)
+  - FP4:  naive 11.79% → pct 22.39% (+10.60%)
+  - Damage increases as bit width decreases (fewer levels → more sensitive to scale choice)
+- **Percentile clipping removes domain-specific outlier weights** - for general models these are adult-speech overspecializations (good to remove); for fine-tuned models these are children-speech adaptations (catastrophic to remove)
+- **FP2 E1M0 (no zero) worse than INT2 (has zero)** - FP2 grid {±0.5, ±1.0} has no zero value; all weights are forced non-zero → attention cannot be suppressed → decoder loops → WER 713%. INT2 {-1, 0, +1} at least allows suppression → WER 100% (controlled failure)
+- **New Rule (Rule 5):** For fine-tuned domain-specific models, use naive absmax quantization. Percentile calibration is harmful - it removes domain adaptation. This is the inverse of Rule 3 for general models
+- **Grounded in:** ACIQ (Banner et al. 2019) - percentile removes outliers which are overspecializations in general models but are task-specific features in fine-tuned models
+
+---
+
 ## 📊 Experiment Results
 
 ### Baselines - Whisper Large-v3, MyST Test Set (filtered, 3,972 chunks)
@@ -408,7 +459,8 @@ Kid_Whisper_ASR/
 │   ├── 13_ptq_fp_formats.py               ← FP8 E4M3/E5M2 and FP4 E2M1 quantization
 │   ├── 14_lora_recovery.py                ← LoRA recovery on pruned 2L model (ready, not run)
 │   ├── 15_qlora_finetune.py               ← FP4 E2M1+pct + custom LoRA fine-tuning
-│   └── 16_qlora_hf_tutorial.py            ← HuggingFace NF4+PEFT LoRA (partial - env issues)
+│   ├── 16_qlora_hf_tutorial.py            ← HuggingFace NF4+PEFT LoRA (partial - env issues)
+│   └── 18_kid_whisper_ptq.py              ← KID-Whisper comprehensive PTQ (INT/FP/bitsandbytes)
 ├── experiments/
 │   ├── predictions_*.txt         ← Raw inference outputs
 │   ├── *_normalized.txt          ← Normalized GT + prediction pairs
@@ -426,7 +478,8 @@ Kid_Whisper_ASR/
 | Week 2 | MyST corpus filtering (KID-Whisper methodology), baseline WER = 14.46% confirmed, evaluation pipeline built. | ✅ Done |
 | Week 3 | Full compression suite: bitsandbytes PTQ (INT8/NF4/FP4), our PyTorch absmax PTQ (all bit widths), layer pruning, calibrated PTQ (percentile INT4=19%, percentile INT2=100%). Key findings: scheme > bit-width; percentile clipping effective only at 4-bit+; 4-bit is minimum viable with calibration; activation-aware scaling fails for children's speech. | ✅ Done |
 | Week 4 | Floating point quantization (FP8 E4M3 naive 14.45%, FP8 E4M3+pct 13.98%, FP8 E5M2 100%, FP4 E2M1 naive 15.87%, FP4 E2M1+pct 14.03%). Key findings: mantissa bits > exponent range; percentile universally beneficial for all formats; FP8 E4M3+pct is best result overall; FP4 E2M1+pct confirms bitsandbytes FP4 internal grid. Grounded in ACIQ (Banner et al. 2019). | ✅ Done |
-| Week 5 | Custom FP4 E2M1+pct + LoRA fine-tuning. Optimal: r=16 q+v 500 steps → 13.77% WER (-0.26% vs zero-shot). Key findings: exposure bias limits training to ~500 steps; use_reentrant=False required for gradient checkpointing; larger LoRA (r=32+fc1) worse due to 4× amplification. Scheduled sampling pending to overcome ceiling. | ✅ Done (pending improvement) |
+| Week 5 | Custom FP4 E2M1+pct + LoRA fine-tuning. Optimal: r=16 q+v 500 steps → 13.77% WER (-0.26% vs zero-shot). Key findings: exposure bias limits training to ~500 steps; use_reentrant=False required for gradient checkpointing; larger LoRA (r=32+fc1) worse due to 4× amplification. Scheduled sampling (embedding mixing) did not help. | ✅ Done |
+| Week 6 | KID-Whisper PTQ: quantizing already-fine-tuned children's speech models. Small multilingual FP16 baseline: 11.45%. Best: INT8 naive 11.35% (-0.10%). FP4 naive 11.79% (+0.34%). KEY FINDING: percentile clipping hurts fine-tuned models (inverse of general model rule). Minimum viable: 4-bit. INT2/FP2 and below fail. bitsandbytes experiments running. | 🔄 In Progress | Optimal: r=16 q+v 500 steps → 13.77% WER (-0.26% vs zero-shot). Key findings: exposure bias limits training to ~500 steps; use_reentrant=False required for gradient checkpointing; larger LoRA (r=32+fc1) worse due to 4× amplification. Scheduled sampling pending to overcome ceiling. | ✅ Done (pending improvement) |
 
 ---
 
@@ -455,4 +508,4 @@ Kid_Whisper_ASR/
 
 ---
 
-*Last updated: Week 5 (complete) - July 2026*
+*Last updated: Week 6 (in progress) - August 2026*
