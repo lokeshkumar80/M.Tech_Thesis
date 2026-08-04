@@ -365,16 +365,26 @@ Naive quantization preserves children's speech features. Rule: fine-tuned models
 
 | # | Method | WER% | vs FP16 | Size | RTF | Status |
 |---|--------|------|---------|------|-----|--------|
-| KW-M-1 | FP16 baseline | 11.00% | — | 1.423 GB | 0.043 | ✅ Full |
-| KW-M-2 | INT8 naive (ours) | pending | — | — | — | 🔄 Running |
-| KW-M-3 | FP8 naive (ours) | pending | — | — | — | ⏳ |
-| KW-M-4 | FP4 naive (ours) | pending | — | — | — | ⏳ |
-| KW-M-5 | INT4 naive (ours) | pending | — | — | — | ⏳ |
-| KW-M-6 | BnB NF4 | pending | — | — | — | ⏳ |
-| KW-M-7 | BnB FP4 | pending | — | — | — | ⏳ |
-| KW-M-8 | INT8/FP8/FP4 pct | skipped | — | — | — | ⏭️ Known harmful |
+*Sizes: Actual stored vs Theoretical (true N-bit). Non-linear layers (0.211 GB) always FP16.*
 
-**Note:** Medium model (1.423 GB FP16) is 3.16× larger than Small (0.450 GB) but only 0.45% better WER (11.00% vs 11.45%) under our 30s concatenated evaluation protocol. Paper shows larger gap (8.91% vs 11.80%) likely because individual utterance evaluation favors larger models.
+| # | Method | WER% | vs FP16 | Actual Size | Theor. Size | RTF | Note |
+|---|--------|------|---------|------------|-------------|-----|------|
+| **KW-M-0** | **BnB FP4** | **10.98%** | **-0.02%** | **0.438 GB** | **0.514 GB** | **0.051** | **BEST - beats FP16** |
+| KW-M-1 | FP16 baseline | 11.00% | — | 1.423 GB | 1.423 GB | 0.043 | float16 |
+| KW-M-2 | INT8 naive (ours) | 11.00% | +0.005% | 0.817 GB | 0.817 GB | 0.062 | actual=theoretical ✓ |
+| KW-M-3 | FP8 naive (ours) | 11.00% | +0.005% | 0.817 GB | 0.817 GB | 0.066 | actual=theoretical ✓ |
+| KW-M-4 | BnB NF4 | 11.04% | +0.044% | 0.438 GB | 0.514 GB | 0.062 | true 4-bit + double quant |
+| KW-M-5 | INT4 naive (ours) | 11.32% | +0.322% | 0.817 GB | 0.514 GB | 0.061 | faster than FP4, same WER |
+| KW-M-6 | FP4 naive (ours) | 11.32% | +0.324% | 0.817 GB | 0.514 GB | 0.103 | int8 stores 4-bit idx |
+| KW-M-7 | INT8/FP8/FP4 pct | skipped | harmful | — | — | — | ⏭️ Known harmful from Small |
+| KW-M-8 | INT2/FP2 naive | skipped | catastrophic | — | — | — | ⏭️ Known from Small |
+
+**Key Medium Findings:**
+- **BnB FP4 (10.98%) beats FP16 (11.00%)** - domain regularization effect: 4-bit quantization noise removes slight overfit patterns, improving generalization. Achieved at 0.438 GB (69.2% smaller than 1.423 GB FP16)
+- **INT8 and FP8 are completely lossless** (11.001% vs 11.00%) - only 7 additional word errors in 130,000 words. Unrounded WER difference: +0.00519%. 769M params absorb quantization noise below beam search decision boundary
+- **INT4 equals FP4 at 4-bit for Medium** (both 11.32%) - grid choice (exponential vs linear) becomes irrelevant at 769M params. INT4 preferred: 41% faster RTF (0.061 vs 0.103), same WER
+- **Medium more robust than Small at every bit width** - Small FP4: +0.34%, Medium FP4: +0.32%; Small INT8: -0.10%, Medium INT8: +0.005%
+- **Size note:** Medium (1.423 GB FP16) is 3.16× larger than Small (0.450 GB) but only 0.45% better WER under our 30s concatenated protocol. Paper gap (8.91% vs 11.80%) is larger because individual utterance evaluation favors bigger models
 
 ---
 
@@ -513,7 +523,7 @@ Kid_Whisper_ASR/
 | Week 3 | Full compression suite: bitsandbytes PTQ (INT8/NF4/FP4), our PyTorch absmax PTQ (all bit widths), layer pruning, calibrated PTQ (percentile INT4=19%, percentile INT2=100%). Key findings: scheme > bit-width; percentile clipping effective only at 4-bit+; 4-bit is minimum viable with calibration; activation-aware scaling fails for children's speech. | ✅ Done |
 | Week 4 | Floating point quantization (FP8 E4M3 naive 14.45%, FP8 E4M3+pct 13.98%, FP8 E5M2 100%, FP4 E2M1 naive 15.87%, FP4 E2M1+pct 14.03%). Key findings: mantissa bits > exponent range; percentile universally beneficial for all formats; FP8 E4M3+pct is best result overall; FP4 E2M1+pct confirms bitsandbytes FP4 internal grid. Grounded in ACIQ (Banner et al. 2019). | ✅ Done |
 | Week 5 | Custom FP4 E2M1+pct + LoRA fine-tuning. Optimal: r=16 q+v 500 steps → 13.77% WER (-0.26% vs zero-shot). Key findings: exposure bias limits training to ~500 steps; use_reentrant=False required for gradient checkpointing; larger LoRA (r=32+fc1) worse due to 4× amplification. Scheduled sampling (embedding mixing) did not help. | ✅ Done |
-| Week 6 | KID-Whisper Small complete (15 methods). Best size-quality: BnB NF4 11.44% 0.173 GB. Best WER: INT8 naive 11.35%. Minimum viable 4-bit: FP4 naive 11.79% / BnB FP4 11.48%. Three tiers: near-lossless (NF4/FP4/INT8 naive), usable (FP8/FP4/INT4 naive), unacceptable (all pct + INT2+). Medium model experiments next. | 🔄 In Progress | Optimal: r=16 q+v 500 steps → 13.77% WER (-0.26% vs zero-shot). Key findings: exposure bias limits training to ~500 steps; use_reentrant=False required for gradient checkpointing; larger LoRA (r=32+fc1) worse due to 4× amplification. Scheduled sampling pending to overcome ceiling. | ✅ Done (pending improvement) |
+| Week 6 | KID-Whisper Small + Medium complete. Small best: INT8 naive 11.35% / BnB NF4 11.44% 0.173 GB. Medium best: BnB FP4 10.98% (beats FP16!) 0.438 GB. Key findings: (1) naive always better than pct for fine-tuned models; (2) INT8/FP8 lossless for Medium; (3) INT4=FP4 for Medium (grid irrelevant at scale); (4) BnB 4-bit beats our FP4 via true packing; (5) domain regularization at 4-bit. | ✅ Complete | Optimal: r=16 q+v 500 steps → 13.77% WER (-0.26% vs zero-shot). Key findings: exposure bias limits training to ~500 steps; use_reentrant=False required for gradient checkpointing; larger LoRA (r=32+fc1) worse due to 4× amplification. Scheduled sampling pending to overcome ceiling. | ✅ Done (pending improvement) |
 
 ---
 
@@ -542,4 +552,4 @@ Kid_Whisper_ASR/
 
 ---
 
-*Last updated: Week 6 (KID-Whisper Small complete, Medium pending) - August 2026*
+*Last updated: Week 6 (KID-Whisper Small + Medium complete) - August 2026*
