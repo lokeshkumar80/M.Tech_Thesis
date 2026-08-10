@@ -523,7 +523,96 @@ Kid_Whisper_ASR/
 | Week 3 | Full compression suite: bitsandbytes PTQ (INT8/NF4/FP4), our PyTorch absmax PTQ (all bit widths), layer pruning, calibrated PTQ (percentile INT4=19%, percentile INT2=100%). Key findings: scheme > bit-width; percentile clipping effective only at 4-bit+; 4-bit is minimum viable with calibration; activation-aware scaling fails for children's speech. | ✅ Done |
 | Week 4 | Floating point quantization (FP8 E4M3 naive 14.45%, FP8 E4M3+pct 13.98%, FP8 E5M2 100%, FP4 E2M1 naive 15.87%, FP4 E2M1+pct 14.03%). Key findings: mantissa bits > exponent range; percentile universally beneficial for all formats; FP8 E4M3+pct is best result overall; FP4 E2M1+pct confirms bitsandbytes FP4 internal grid. Grounded in ACIQ (Banner et al. 2019). | ✅ Done |
 | Week 5 | Custom FP4 E2M1+pct + LoRA fine-tuning. Optimal: r=16 q+v 500 steps → 13.77% WER (-0.26% vs zero-shot). Key findings: exposure bias limits training to ~500 steps; use_reentrant=False required for gradient checkpointing; larger LoRA (r=32+fc1) worse due to 4× amplification. Scheduled sampling (embedding mixing) did not help. | ✅ Done |
-| Week 6 | KID-Whisper Small + Medium complete. Small best: INT8 naive 11.35% / BnB NF4 11.44% 0.173 GB. Medium best: BnB FP4 10.98% (beats FP16!) 0.438 GB. Key findings: (1) naive always better than pct for fine-tuned models; (2) INT8/FP8 lossless for Medium; (3) INT4=FP4 for Medium (grid irrelevant at scale); (4) BnB 4-bit beats our FP4 via true packing; (5) domain regularization at 4-bit. | ✅ Complete | Optimal: r=16 q+v 500 steps → 13.77% WER (-0.26% vs zero-shot). Key findings: exposure bias limits training to ~500 steps; use_reentrant=False required for gradient checkpointing; larger LoRA (r=32+fc1) worse due to 4× amplification. Scheduled sampling pending to overcome ceiling. | ✅ Done (pending improvement) |
+| Week 6 | KID-Whisper multilingual Small + Medium PTQ (old protocol). Small-myst best: INT8 naive 11.35% / BnB NF4 11.44% 0.173 GB. Medium-en best: BnB FP4 10.98% (beats FP16!). Key rules: naive > pct for fine-tuned; INT8/FP8 lossless for 769M; grid irrelevant at scale; FP2 no-zero → 713% WER. | ✅ Done |
+| Week 7 | Corrected protocol (EN model + pipeline chunk_length_s=30). Small-EN: FP8 naive 8.99% beats paper, BnB FP4 9.29% 0.173 GB best size-quality. Medium-EN: BnB FP4 8.93% matches paper at 0.438 GB. INT4=FP4 at 769M (grid irrelevant at scale), INT4 25% faster. EN 4-bit cliff: Small INT4 24.81% catastrophic vs Medium INT4 9.20% fine. All methods complete. | ✅ Done |
+
+---
+
+## ✅ Week 7 | Corrected Evaluation Protocol + Comprehensive PTQ
+
+**Critical correction from Week 6:** Week 6 used wrong model (multilingual Small) and broken pipeline (truncated >30s chunks). Week 7 establishes correct baselines matching the paper.
+
+**Corrected Protocol:**
+- Model: `aadel4/kid-whisper-small-en-myst` (English-only) for Small experiments
+- Pipeline: HuggingFace `pipeline(chunk_length_s=30)` handles >30s chunks correctly
+- Decoding: Beam-5, batch=4
+- This matches the paper's evaluation approach
+
+#### Corrected Baselines vs Paper
+
+| Model | Our FP16 WER | Paper WER | Gap |
+|---|---|---|---|
+| kid-whisper-small-en-myst | 9.16% | 9.11% | 0.05% |
+| kid-whisper-medium-en-myst | 8.94% | 8.91% | 0.03% |
+
+#### KID-Whisper Small-EN Complete PTQ Results (aadel4/kid-whisper-small-en-myst)
+
+*Protocol: HuggingFace pipeline, chunk_length_s=30, Beam-5, batch=4, EnglishTextNormalizer*
+
+| Method | WER% | vs FP16 | Actual Size | Theor. Size | RTF |
+|---|---|---|---|---|---|
+| **FP8 naive (ours)** | **8.99%** | **-0.17%** | 0.303 GB | 0.303 GB | 0.015 |
+| BnB INT8 | 9.01% | -0.15% | 0.266 GB | 0.303 GB | 0.027 |
+| INT8 naive (ours) | 9.09% | -0.07% | 0.303 GB | 0.303 GB | 0.015 |
+| Paper (FP16) | 9.11% | — | — | — | — |
+| FP16 baseline | 9.16% | — | 0.450 GB | 0.450 GB | 0.013 |
+| **BnB FP4** | **9.29%** | **+0.13%** | **0.173 GB** | **0.229 GB** | **0.014** |
+| BnB NF4 | 9.42% | +0.26% | 0.173 GB | 0.229 GB | 0.015 |
+| FP4 naive (ours) | 12.33% | +3.17% | 0.303 GB | 0.229 GB | 0.020 |
+| INT4 naive (ours) | 24.81% | +15.65% | 0.303 GB | 0.229 GB | 0.020 |
+
+#### KID-Whisper Medium-EN Complete PTQ Results (aadel4/kid-whisper-medium-en-myst)
+
+*Protocol: HuggingFace pipeline, chunk_length_s=30, Beam-5, batch=4, EnglishTextNormalizer*
+
+| Method | WER% | vs FP16 | Actual Size | Theor. Size | RTF |
+|---|---|---|---|---|---|
+| Paper (FP16) | 8.91% | — | — | — | — |
+| **BnB FP4** | **8.93%** | **-0.01%** | **0.438 GB** | **0.514 GB** | **0.035** |
+| FP16 baseline | 8.94% | — | 1.423 GB | 1.423 GB | 0.032 |
+| FP8 naive (ours) | 9.12% | +0.18% | 0.817 GB | 0.817 GB | 0.038 |
+| BnB INT8 | 9.18% | +0.24% | 0.767 GB | 0.817 GB | 0.057 |
+| BnB NF4 | 9.19% | +0.25% | 0.438 GB | 0.514 GB | 0.036 |
+| INT4 naive (ours) | 9.20% | +0.26% | 0.817 GB | 0.514 GB | 0.039 |
+| FP4 naive (ours) | 9.22% | +0.28% | 0.817 GB | 0.514 GB | 0.049 |
+| INT8 naive (ours) | 9.25% | +0.31% | 0.817 GB | 0.817 GB | 0.038 |
+
+#### Week 7 Key Findings
+
+- **BnB FP4 Medium-EN (8.93%) matches paper (8.91%) at 69.2% smaller size** - 0.438 GB vs 1.423 GB, practically identical WER. Best result of entire study
+- **FP8 naive beats paper for Small-EN (8.99% < 9.11%)** - domain regularization from FP8 exponential quantization noise removes slight overfit, improving generalization
+- **4-bit cliff much steeper for EN model than multilingual**:
+  - Small multilingual: FP4 naive +0.34%, INT4 naive +1.63%
+  - Small-EN: FP4 naive +3.17%, INT4 naive +15.65% (10× steeper)
+  - English-only fine-tuning creates highly specialized weights needing >4-bit precision
+- **BnB FP4 beats BnB NF4 for EN models** (Small: 9.29% vs 9.42%, Medium: 8.93% vs 9.19%) - English fine-tuning shifts weight distribution away from Gaussian, making NF4 Gaussian quantile grid suboptimal vs FP4 proprietary grid
+- **Medium more robust than Small at 4-bit**: BnB FP4 Medium +0.01% vs Small +0.13% - larger capacity absorbs 4-bit quantization noise better
+- **4-bit grid reversal at scale**: Small-EN FP4 beats INT4 by 12.48% (exponential essential at 244M). Medium-EN INT4 (9.20%) marginally beats FP4 (9.22%) - grid irrelevant at 769M. INT4 also 25% faster RTF (0.039 vs 0.049). Crossover between 244M and 769M params
+- **Complete deployment recommendations**: Edge: BnB FP4 Small 9.29% 0.173 GB. Balanced: FP8 naive Small 8.99% 0.303 GB. Best: BnB FP4 Medium 8.93% 0.438 GB (matches paper at 69.2% smaller)
+- **K-means codebook quantization FAILS on English-only fine-tuned models** (script 19_kmeans_quantization.py, corrected protocol on Small-EN):
+  - kmeans_k16 (200 chunks): 519.50% WER - complete hallucination loops
+  - kmeans_k32 (200 chunks): 124.97% WER - still catastrophic despite 32 learned centroids
+  - vs Small-multilingual kmeans_k16 (full 3972 chunks): 12.70% WER (acceptable)
+  - Root cause: EN fine-tuning creates highly non-Gaussian weight patterns with heavy tails; k-means with 50K sample (8.5% of weights) cannot capture EN's specialized sparse tail structure; K centroids miss critical outlier weights that carry EN-specific children's speech adaptations
+  - Fixed exponential grids (FP4 E2M1: 12.33%) and quantile grids (BnB NF4: 9.42%) succeed because they don't depend on sampling and preserve outlier structure
+  - **New finding**: Learned codebook quantization requires near-Gaussian weight distributions; fine-tuned domain-specific models violate this assumption and require hand-designed structural grids
+
+---
+
+
+### Supplementary: K-means Codebook Quantization Attempts (Week 7)
+
+*Method: MiniBatchKMeans on per-channel normalized weights, k centroids as learned quantization levels. Compared with fixed-grid alternatives on kid-whisper-small-en-myst.*
+
+| Method | Levels | Sampling | WER% (200 chunks) | Status | Root Cause |
+|---|---|---|---|---|---|
+| kmeans_k16 | 16 learned | 50K/590K (8.5%) | 519.50% | ❌ Catastrophic | Sparse tail structure lost |
+| kmeans_k32 | 32 learned | 50K/590K (8.5%) | 124.97% | ❌ Catastrophic | Sparse tail structure lost |
+| FP4 naive (fixed E2M1) | 15 fixed | N/A | 12.33% | ⚠️ 4-bit cliff | Reserves outlier levels |
+| BnB NF4 (Gaussian quantile) | 16 fixed | N/A | 9.42% | ✅ Near-lossless | No sampling issue |
+
+**Comparison with Small-multilingual results (Week 6):** kmeans_k16 achieved 12.70% WER on full 3972 chunks - acceptable performance. The catastrophic degradation on English-only fine-tuned model is a novel finding, revealing that learned codebook quantization requires the near-Gaussian weight distribution assumption to hold. English fine-tuning creates sharp, non-Gaussian distributions with heavy tails that k-means cannot capture with limited sampling.
+
 
 ---
 
@@ -552,4 +641,4 @@ Kid_Whisper_ASR/
 
 ---
 
-*Last updated: Week 6 (KID-Whisper Small + Medium complete) - August 2026*
+*Last updated: Week 7 (Corrected protocol + Small-EN + Medium-EN complete) - August 2026*
