@@ -437,6 +437,50 @@ Naive quantization preserves children's speech features. Rule: fine-tuned models
 | FP4 naive (ours) | 9.22% | +0.28% | 0.817 GB | 0.514 GB | 0.049 |
 | INT8 naive (ours) | 9.25% | +0.31% | 0.817 GB | 0.817 GB | 0.038 |
 
+#### KID-Whisper Small-multilingual Complete PTQ Results (aadel4/kid-whisper-small-myst)
+
+*Corrected protocol (Week 7 re-run of Week 6 experiments). Note: paper reports 11.80% WER for this model.*
+
+| Method | WER% | vs FP16 | Actual Size | Theor. Size | RTF |
+|---|---|---|---|---|---|
+| **INT8 naive (ours)** | **9.67%** | **-0.24%** | 0.303 GB | 0.303 GB | 0.023 |
+| BnB INT8 | 9.74% | -0.17% | 0.266 GB | 0.303 GB | 0.037 |
+| **BnB NF4** | **9.76%** | **-0.15%** | **0.173 GB** | **0.229 GB** | **0.022** |
+| BnB FP4 | 9.87% | -0.04% | 0.173 GB | 0.229 GB | 0.022 |
+| FP16 baseline | 9.91% | — | 0.450 GB | 0.450 GB | 0.021 |
+| FP8 naive (ours) | 9.92% | +0.01% | 0.303 GB | 0.303 GB | 0.023 |
+| FP4 naive (ours) | 10.12% | +0.21% | 0.303 GB | 0.229 GB | 0.027 |
+| INT4 naive (ours) | 11.38% | +1.47% | 0.303 GB | 0.229 GB | 0.024 |
+| Paper (FP16, their protocol) | 11.80% | — | — | — | — |
+
+**Small-multilingual key findings:**
+- **ALL methods beat paper baseline (11.80%)** - even INT4 naive (11.38%) beats paper by 0.42%
+- **Domain regularization strongest at INT8** (-0.24%): INT8 naive 9.67% best WER; multilingual vocabulary benefits most from quantization noise
+- **NF4 wins over FP4 for multilingual** (9.76% vs 9.87%): Gaussian quantile grid optimal for near-Gaussian multilingual weights - opposite of EN model where FP4 wins
+- **Old protocol underestimated multilingual quality** (Week 6: 11.45% → Week 7 corrected: 9.91%, 1.54% improvement from proper >30s chunk handling)
+- **4-bit cliff much smaller than EN**: FP4 +0.21% vs Small-EN +3.17% (15× less severe); INT4 +1.47% vs Small-EN +15.65% (10× less severe)
+
+#### Cross-Model Comparison (All Corrected Protocol)
+
+| Method | Small-multilingual | Small-EN | Medium-EN |
+|---|---|---|---|
+| FP16 | 9.91% | 9.16% | 8.94% |
+| Paper baseline | 11.80% | 9.11% | 8.91% |
+| INT8 naive | **9.67%** | 9.09% | 9.25% |
+| FP8 naive | 9.92% | **8.99%** | 9.12% |
+| FP4 naive | 10.12% | 12.33% | 9.22% |
+| INT4 naive | 11.38% | 24.81% | 9.20% |
+| BnB INT8 | 9.74% | 9.01% | 9.18% |
+| BnB NF4 | **9.76%** | 9.42% | 9.19% |
+| BnB FP4 | 9.87% | **9.29%** | **8.93%** |
+
+**Novel Grid Preference Reversal Finding:**
+- Small-multilingual: NF4 beats FP4 by 0.11% (near-Gaussian weights → quantile grid wins)
+- Small-EN: FP4 beats NF4 by 0.13% (fine-tuning shifts weights → proprietary grid wins)
+- Medium-EN: FP4 beats NF4 by 0.26% (fine-tuning shift confirmed at scale)
+
+The grid preference reversal is a signature of weight distribution shape. Multilingual training preserves near-Gaussian distribution; English-only fine-tuning creates specialized non-Gaussian patterns.
+
 #### Week 7 Key Findings
 
 - **BnB FP4 Medium-EN (8.93%) matches paper (8.91%) at 69.2% smaller size** - 0.438 GB vs 1.423 GB, practically identical WER. Best result of entire study
@@ -489,6 +533,29 @@ Naive quantization preserves children's speech features. Rule: fine-tuned models
 - k=32 (5-bit):    9.73% (+0.79% vs FP16)
 - k=256 (8-bit):   9.16% (+0.22% vs FP16)
 - FP8 fixed (8-bit): 9.12% (+0.18% vs FP16, asymptotic limit)
+
+**Small-multilingual complete k-means results (full 3972 chunks):**
+
+| Method | Levels | Storage | WER% | vs FP16 (9.91%) | Status |
+|---|---|---|---|---|---|
+| kmeans_k16 (learned) | 16 | 0.192 GB (true 4-bit) | 16.20% | +6.29% | ❌ Too few levels |
+| kmeans_k32 (learned) | 32 | 0.303 GB (int8) | 10.22% | +0.31% | ✅ Functional |
+| **kmeans_k256 (learned)** | 256 | 0.303 GB (int8) | **9.61%** | **-0.30%** | ✅ **BEATS all fixed grids!** |
+
+**Multilingual k-means logarithmic convergence:**
+- k=16 (4-bit):   16.20% (+6.29% vs FP16)  ← too few centroids
+- k=32 (5-bit):   10.22% (+0.31% vs FP16)  ← functional
+- k=256 (8-bit):   9.61% (-0.30% vs FP16)  ← BEATS FP16 and all fixed grids!
+
+**Cross-model k-means scan (kmeans_k256 at 0.303 GB):**
+
+| Model | Weights | WER% | vs Fixed FP8 | Interpretation |
+|---|---|---|---|---|
+| Small-multilingual (244M) | Near-Gaussian | **9.61%** | **-0.31%** | ✅ Beats fixed FP8 (9.92%) |
+| Medium-EN (769M) | Non-Gaussian, absorbed | 9.16% | +0.04% | ✅ Matches fixed FP8 (9.12%) |
+| Small-EN (244M) | Non-Gaussian, fragile | 16.01% | +7.02% | ❌ Fails vs fixed FP8 (8.99%) |
+
+**Critical validation: kmeans_k256 on Small-multilingual (9.61%) becomes the NEW BEST method overall for this model**, beating INT8 naive (9.67%) and even the FP16 baseline (9.91%). This confirms the theoretical hypothesis: when weights are truly near-Gaussian, learned codebooks discover better quantization levels than any hand-designed grid.
 
 **Cross-model comparison at same bit-width:**
 
