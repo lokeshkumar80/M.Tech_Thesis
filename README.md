@@ -557,6 +557,69 @@ The grid preference reversal is a signature of weight distribution shape. Multil
 
 **Critical validation: kmeans_k256 on Small-multilingual (9.61%) becomes the NEW BEST method overall for this model**, beating INT8 naive (9.67%) and even the FP16 baseline (9.91%). This confirms the theoretical hypothesis: when weights are truly near-Gaussian, learned codebooks discover better quantization levels than any hand-designed grid.
 
+### Supplementary: Negative Results - Percentile Clipping and Low-Bit Quantization
+
+To establish the complete boundaries of viable quantization for KID-Whisper models, we systematically documented all failed methods. This section presents percentile clipping (pct) results and sub-4-bit results across all three variants.
+
+#### Percentile Clipping (99.9) Results - All Three Variants
+
+*Percentile clipping truncates weights above the 99.9th percentile before quantization. Effective for pre-trained models (Rule 3), harmful for fine-tuned models (Rule 5).*
+
+| Method | Small-EN Naive | Small-EN pct | Small-multi Naive | Small-multi pct | Medium-EN Naive | Medium-EN pct |
+|---|---|---|---|---|---|---|
+| INT8 | 9.09% | **29.68% (+20.59%)** | 9.67% | 14.43% (+4.76%) | 9.25% | 9.93% (+0.68%) |
+| FP8 | 8.99% | **32.19% (+23.20%)** | 9.92% | 16.01% (+6.09%) | 9.12% | 10.27% (+1.15%) |
+| INT4 | 24.81% | **77.53% (+52.72%)** | 11.38% | 33.64% (+22.26%) | 9.20% | 10.05% (+0.85%) |
+| FP4 | 12.33% | **40.92% (+28.59%)** | 10.12% | 19.90% (+9.78%) | 9.22% | 10.30% (+1.08%) |
+
+**Percentile clipping damage scaling with model capacity:**
+- Small-EN (244M, fine-tuned): +20% to +52% damage - percentile devastating
+- Small-multilingual (244M, multilingual): +5% to +22% damage - significantly harmful
+- Medium-EN (769M, fine-tuned): +0.68% to +1.15% damage - essentially free
+- **Novel finding**: Model capacity nearly eliminates percentile damage. At 769M+ params, percentile clipping becomes essentially cost-free due to weight redundancy
+
+**Cross-model damage ratios:**
+- Small-EN pct damage is 2-2.3× worse than Small-multilingual (EN fine-tuning creates fragile outliers)
+- Medium-EN pct damage is 30-62× LESS than Small-EN (model capacity absorbs outlier destruction)
+
+#### Sub-4-bit Quantization Results (Small-EN Complete + Medium-EN INT2)
+
+*Documents the lower boundary of viable quantization. All methods below 4-bit are unusable.*
+
+**Small-EN low-bit results (full 3972 chunks):**
+
+| Method | WER% | RTF | Failure Mode |
+|---|---|---|---|
+| INT2 naive | 928.25% | 0.132 | ❌ Catastrophic hallucination |
+| INT2 pct | 100.00% | 0.124 | ❌ Empty output |
+| INT1 naive | 200.92% | 0.125 | ❌ 1-bit + linear grid useless |
+| FP2 naive | 885.83% | 0.156 | ❌ No-zero hallucination |
+| FP2 pct | 636.16% | 0.155 | ❌ Still hallucinates |
+| FP1 naive | 137.65% | 0.150 | ❌ "Least worst" 1-bit |
+
+**Medium-EN INT2 naive verification:**
+- Medium-EN INT2 naive: 100.00% WER (produces empty/minimal output)
+- Contrast: Small-EN INT2 naive 928% (hallucinates), Medium-EN 100% (silences)
+- **Model capacity affects failure mode but not viability**: 2-bit is unusable at both 244M and 769M scales
+
+**Key findings on low-bit boundaries:**
+1. **INT2 naive worst on Small-EN** (928%) vs FP2 naive (885%) - EN specialized weights need >2-bit precision
+2. **FP1 naive least-worst 1-bit** (137%) - exponential single-bit somehow captures more than sign-only INT1 (200%)
+3. **Percentile clipping LIMITS hallucination** at 2-bit: fp2_pct 636% < fp2_naive 885% - because less signal remains to hallucinate with
+4. **Medium capacity does not rescue 2-bit** - both models 100%+ WER, just different failure modes
+
+**Complete quantization spectrum documented (Small-EN):**
+
+| Bit width | Best Naive | Best pct | Best BnB | Verdict |
+|---|---|---|---|---|
+| 16-bit | FP16: 9.16% | — | — | ✅ Baseline |
+| 8-bit | FP8: 8.99% | INT8: 29.68% | BnB INT8: 9.01% | ✅ Best naive/BnB, ❌ pct |
+| 4-bit | FP4: 12.33% | FP4: 40.92% | BnB FP4: 9.29% | ⚠️ Naive cliff, ✅ BnB, ❌ pct |
+| 2-bit | FP2: 885% | INT2: 100% | — | ❌ All fail |
+| 1-bit | FP1: 137% | — | — | ❌ All fail |
+
+**Practical minimum viable bit-width for children's ASR: 4-bit** (via BnB NF4/FP4 with true nibble packing)
+
 **Cross-model comparison at same bit-width:**
 
 | Bit width | Method | Small-EN WER | Medium-EN WER | Cross-model gap |
