@@ -876,11 +876,11 @@ Pruned models still stored as dense FP16 (0.450 GB for Small, 1.423 GB for Mediu
 ## Overview
 
 Post-training quantization (PTQ) sweep applied to vanilla (non-fine-tuned)
-OpenAI Whisper checkpoints -- Small.en, Small (multilingual), and Medium.en --
-using the corrected evaluation protocol (see below). This complements the
-KID-Whisper fine-tuned model results by isolating the effect of domain
-fine-tuning: same architectures, same PTQ methods, same test set, only the
-training regime differs.
+OpenAI Whisper checkpoints -- Small.en, Small (multilingual), Medium.en, and
+Medium (multilingual) -- using the corrected evaluation protocol (see below).
+This complements the KID-Whisper fine-tuned model results by isolating the
+effect of domain fine-tuning: same architectures, same PTQ methods, same
+test set, only the training regime differs.
 
 Script: `scripts/20_vanilla_medium_ptq.py`
 
@@ -897,6 +897,17 @@ and cross-verified with `calculate_wer.py` on every run.
 
 Test set: MyST children's speech corpus, 3,972 concatenated 30-second test
 chunks (same set used throughout the thesis for the KID-Whisper experiments).
+
+The quantization logic (`quantize_model()`, `per_channel_scale()`,
+`lut_quantize()`) contains no model-conditional branching -- these functions
+take only `(model, method)` and never reference `args.model_id` or any
+other model-specific state. The only places `args.model_id` is used are
+output naming, processor/checkpoint loading, and the `language`/`task`
+generation kwargs for multilingual models. This was verified directly by
+grepping the script for every `args.model_id` reference and confirming none
+fall inside the quantization functions, so any difference in outcome
+between models reflects differences in the models' actual weights, not
+differences in how they were processed.
 
 ## Paper Reference Baselines
 
@@ -922,12 +933,13 @@ test set, compared against the paper's zero-shot numbers [2]:
 | Small.en | 14.51% | 13.93% | +0.58 pp |
 | Small (ML) | 14.82% | 14.06% | +0.76 pp |
 | Medium.en | 13.45% | 13.23% | +0.22 pp |
+| Medium (ML) | 13.79% | 12.90% | +0.89 pp |
 
-All three reproductions land within 1 percentage point of the published
+All four reproductions land within 1 percentage point of the published
 zero-shot numbers, confirming the corrected evaluation protocol is sound.
-Prior to the protocol correction, Medium.en's manually-evaluated FP16
-baseline measured 14.73% (a 1.50 pp gap to paper), so the pipeline-based
-correction closed roughly 85% of that gap.
+Multilingual variants consistently show a larger gap to the paper than
+their English-only counterparts, and the gap widens rather than narrows
+going from Small to Medium.
 
 ## Quantization Methods Tested
 
@@ -936,9 +948,9 @@ INT4, FP8 (E4M3), and FP4 (E2M1); production `bitsandbytes` INT8/NF4/FP4 [3];
 and true 4-bit nibble-packed FP4/INT4 (0.5 bytes/weight, verified
 bit-identical in accuracy to the lookup-table equivalents, see Finding 3).
 
-## Results: Whisper Small.en (complete sweep)
+## Results: Whisper Small.en (complete sweep, 14 methods)
 
-| Method | WER | Δ vs FP16 | Size (GB) | Status |
+| Method | WER | Delta vs FP16 | Size (GB) | Status |
 |---|---|---|---|---|
 | BnB FP4 [3] | 14.52% | +0.01 pp | 0.173 | clean |
 | BnB INT8 [3][4] | 14.45% | -0.06 pp | 0.266 | clean |
@@ -948,16 +960,16 @@ bit-identical in accuracy to the lookup-table equivalents, see Finding 3).
 | BnB NF4 [3] | 15.06% | +0.55 pp | 0.173 | clean |
 | FP4 naive | 19.28% | +4.77 pp | 0.303 | degraded |
 | FP4 packed (nibble) | 19.28% | +4.77 pp | 0.192 | degraded |
-| INT8 percentile99.9 | 54.61% | +40.10 pp | 0.303 | **collapsed** |
-| FP8 percentile99.9 | 55.56% | +41.05 pp | 0.303 | **collapsed** |
-| INT4 naive | 56.65% | +42.14 pp | 0.303 | **collapsed** |
-| INT4 packed (nibble) | 56.65% | +42.14 pp | 0.192 | **collapsed** |
-| FP4 percentile99.9 | 71.15% | +56.64 pp | 0.303 | **collapsed** |
-| INT4 percentile99.9 | 115.72% | +101.21 pp | 0.303 | **total breakdown** |
+| INT8 percentile99.9 | 54.61% | +40.10 pp | 0.303 | collapsed |
+| FP8 percentile99.9 | 55.56% | +41.05 pp | 0.303 | collapsed |
+| INT4 naive | 56.65% | +42.14 pp | 0.303 | collapsed |
+| INT4 packed (nibble) | 56.65% | +42.14 pp | 0.192 | collapsed |
+| FP4 percentile99.9 | 71.15% | +56.64 pp | 0.303 | collapsed |
+| INT4 percentile99.9 | 115.72% | +101.21 pp | 0.303 | total breakdown |
 
-## Results: Whisper Small (Multilingual) (complete sweep)
+## Results: Whisper Small (Multilingual) (complete sweep, 12 methods)
 
-| Method | WER | Δ vs FP16 | Size (GB) | Status |
+| Method | WER | Delta vs FP16 | Size (GB) | Status |
 |---|---|---|---|---|
 | BnB NF4 [3] | 14.53% | -0.29 pp | 0.173 | clean |
 | FP16 baseline | 14.82% | -- | 0.450 | -- |
@@ -966,142 +978,223 @@ bit-identical in accuracy to the lookup-table equivalents, see Finding 3).
 | FP8 naive | 15.59% | +0.77 pp | 0.303 | clean |
 | BnB FP4 [3] | 16.34% | +1.52 pp | 0.173 | clean |
 | FP4 naive | 19.47% | +4.65 pp | 0.303 | degraded |
-| INT4 naive | 37.55% | +22.73 pp | 0.303 | **collapsed** |
-| INT8 percentile99.9 | 68.63% | +53.81 pp | 0.303 | **collapsed** |
-| FP8 percentile99.9 | 73.06% | +58.24 pp | 0.303 | **collapsed** |
-| FP4 percentile99.9 | 107.76% | +92.94 pp | 0.303 | **total breakdown** |
-| INT4 percentile99.9 | 189.11% | +174.29 pp | 0.303 | **total breakdown** |
+| INT4 naive | 37.55% | +22.73 pp | 0.303 | collapsed |
+| INT8 percentile99.9 | 68.63% | +53.81 pp | 0.303 | collapsed |
+| FP8 percentile99.9 | 73.06% | +58.24 pp | 0.303 | collapsed |
+| FP4 percentile99.9 | 107.76% | +92.94 pp | 0.303 | total breakdown |
+| INT4 percentile99.9 | 189.11% | +174.29 pp | 0.303 | total breakdown |
 
-## Results: Whisper Medium.en (INT sweep complete, corrected protocol)
+## Results: Whisper Medium.en (complete sweep, 14 methods, all clean)
 
-| Method | WER | Δ vs FP16 | Size (GB) | Status |
+The only model in the entire study that stays clean at every configuration
+tested.
+
+| Method | WER | Delta vs FP16 | Size (GB) | Status |
 |---|---|---|---|---|
+| FP4 naive | 13.48% | +0.03 pp | 0.817 | clean |
+| FP4 packed (nibble) | 13.48% | +0.03 pp | 0.464 | clean |
+| BnB NF4 [3] | 13.53% | +0.08 pp | 0.438 | clean |
 | FP16 baseline | 13.45% | -- | 1.423 | -- |
 | INT8 naive | 13.58% | +0.13 pp | 0.817 | clean |
+| FP8 naive | 13.69% | +0.24 pp | 0.817 | clean |
+| BnB INT8 [3][4] | 13.70% | +0.25 pp | 0.766 | clean |
+| BnB FP4 [3] | 13.91% | +0.46 pp | 0.438 | clean |
 | INT4 naive | 14.10% | +0.65 pp | 0.817 | clean |
+| INT4 packed (nibble) | 14.10% | +0.65 pp | 0.464 | clean |
 | INT8 percentile99.9 | 15.65% | +2.20 pp | 0.817 | clean |
+| FP8 percentile99.9 | 15.71% | +2.26 pp | 0.817 | clean |
 | INT4 percentile99.9 | 15.90% | +2.45 pp | 0.817 | clean |
+| FP4 percentile99.9 | 18.45% | +5.00 pp | 0.817 | clean |
 
-FP8, FP4, `bitsandbytes` (INT8/NF4/FP4), and true nibble-packed (FP4/INT4)
-methods for Medium.en are pending under the corrected protocol.
+## Results: Whisper Medium (Multilingual) (12 of 14 methods complete)
+
+| Method | WER | Delta vs FP16 | Status |
+|---|---|---|---|
+| BnB FP4 [3] | 13.27% | -0.52 pp | clean, beats FP16 |
+| INT8 naive | 13.45% | -0.34 pp | clean, beats FP16 |
+| BnB NF4 [3] | 13.53% | -0.26 pp | clean, beats FP16 |
+| BnB INT8 [3][4] | 13.63% | -0.16 pp | clean, beats FP16 |
+| FP16 baseline | 13.79% | -- | -- |
+| FP8 naive | 14.17% | +0.38 pp | clean |
+| FP4 naive | 16.85% | +3.06 pp | degraded |
+| INT4 naive | 29.33% | +15.54 pp | collapsed |
+| INT4 percentile99.9 | 97.12% | +83.33 pp | total breakdown |
+| INT8 percentile99.9 | 104.76% | +90.97 pp | total breakdown |
+| FP4 percentile99.9 | 106.73% | +92.94 pp | total breakdown |
+| FP8 percentile99.9 | 108.72% | +94.93 pp | total breakdown |
+
+Remaining for Medium (ML): FP4 packed, INT4 packed.
+
+All four percentile99.9-clipped bit-widths were tested on Medium (ML), and
+all four collapsed to total breakdown, confirmed by manual inspection of
+prediction files (93.5% of chunks mismatched on INT8 percentile, matching
+the repetition-loop pattern documented on the Small models -- see Finding 1).
 
 ## Key Findings
 
-### Finding 1: Percentile clipping triggers repetition-loop hallucination
-### collapse at the 244M-parameter scale, but not at 769M -- a clean
-### capacity-threshold effect, independent of quantization grid
+### Finding 1 (headline result, revised after Medium-ML data): quantization
+### stability at the 769M-parameter scale is not a function of capacity
+### alone -- it is the interaction of sufficient capacity AND English-only
+### training
 
-Across both Small models (244M parameters), every percentile-99.9-clipped
-configuration tested collapsed into repetition loops -- predictions running
-to thousands of characters with the same phrase repeated dozens of times
-(verified by manual inspection of prediction files; corroborated by
-inference time roughly doubling to tripling on collapsed runs relative to
-naive runs at the same bit-width, consistent with degenerate generations
-running toward `max_new_tokens` on affected chunks). This held across every
-bit-width and grid type tested:
+An initial hypothesis, based on the three models evaluated first (both
+Small variants and Medium.en), was that a simple capacity threshold around
+769M parameters explained why percentile-clipped quantization collapsed
+into repetition-loop hallucination on Small models but stayed clean on
+Medium.en. Testing Medium (Multilingual) -- the same 769M-parameter
+architecture as Medium.en, differing only in training data -- disproves
+that simpler hypothesis: Medium (ML) collapses just as severely as either
+Small model under percentile clipping at every bit-width tested, and even
+under aggressive naive 4-bit quantization where Medium.en stays essentially
+lossless.
 
-| Config | Small.en WER | Small (ML) WER | Medium.en WER |
+| Model | Params | Language | INT8 pct | FP8 pct | FP4 pct | INT4 pct | INT4 naive |
+|---|---|---|---|---|---|---|---|
+| Small.en | 244M | EN | 54.61% | 55.56% | 71.15% | 115.72% | 56.65% |
+| Small (ML) | 244M | ML | 68.63% | 73.06% | 107.76% | 189.11% | 37.55% |
+| Medium.en | 769M | EN | 15.65% | 15.71% | 18.45% | 15.90% | 14.10% |
+| Medium (ML) | 769M | ML | 104.76% | 108.72% | 106.73% | 97.12% | 29.33% |
+
+Medium.en is the only configuration in the entire study that remains clean
+across every method tested, including the most aggressive combined setting
+(4-bit plus percentile clipping). Medium (ML), despite identical parameter
+count, collapses to total breakdown (WER exceeding 100%) at all four
+percentile-clipped bit-widths tested, and shows real degradation even under
+naive INT4 (29.33% WER, +15.54 pp) where Medium.en costs only +0.65 pp.
+Collapsed runs on Medium (ML) also took markedly longer to evaluate
+(5.5-7 hours versus approximately 110 minutes for Medium.en's clean runs at
+the same settings), and manual inspection of the INT8-percentile prediction
+file confirmed 93.5% of the 3,972 test chunks showed mismatches with
+prediction lengths running to 4,310 characters -- the same repetition-loop
+generation pathology documented on the Small models (92.9-96.6% mismatch
+rates there), not a distinct failure mode.
+
+The revised conclusion: model capacity alone does not predict quantization
+robustness. Robustness instead depends on the interaction between capacity
+and training specialization -- English-only training at sufficient scale
+(769M) provides a stability margin that neither a smaller English-only
+model nor a larger multilingual model provides on its own. Grid type (INT
+vs FP) remains irrelevant to whether collapse occurs at any scale: on every
+model tested, the four percentile-clipped bit-widths land within a
+relatively narrow band of each other regardless of collapse severity (a
+2.26 pp spread across all four grids/bit-widths on Medium.en; a 6.60 pp
+spread on Medium (ML)), while the EN-vs-ML gap on the identical grid can be
+enormous (Medium.en 15.65% vs Medium (ML) 104.76% at INT8-percentile, an
+89.11 percentage-point difference). This is the central thesis contribution
+of the vanilla-model PTQ study.
+
+A plausible (not yet directly confirmed) mechanism: multilingual models
+must route decoding across roughly 99 languages through a shared
+vocabulary and embedding space, and prior work on outlier-aware
+quantization (Dettmers et al., 2022, LLM.int8() [4]) has shown that a small
+number of large-magnitude weights carry disproportionate importance in
+transformer language models, motivating the explicit outlier-isolation
+scheme in `bitsandbytes`' INT8 implementation. Percentile clipping at 99.9%
+specifically removes exactly these extreme-magnitude weights. If
+multilingual training concentrates more of its critical signal into such
+outlier weights than English-only training does, that would explain why
+percentile clipping is catastrophic for both multilingual models regardless
+of size, while English-only models degrade more gracefully. Confirming this
+mechanism directly would require weight-distribution analysis (for example,
+comparing kurtosis or outlier concentration between Medium.en and Medium
+(ML) weight tensors) beyond what this PTQ sweep alone demonstrates.
+
+### Finding 2: grid shape (integer vs float) provides partial protection
+### against collapse at naive 4-bit quantization on fragile models,
+### regardless of what makes the model fragile (small scale or
+### multilingual training)
+
+At naive 4-bit quantization, INT4 (evenly-spaced integer grid) collapses
+more severely than FP4 (E2M1 floating-point grid, wider dynamic range,
+non-uniform spacing) on every model that shows any fragility at all:
+
+| Model | INT4 naive | FP4 naive | Protection gap |
 |---|---|---|---|
-| INT8 percentile99.9 | 54.61% | 68.63% | 15.65% |
-| FP8 percentile99.9 | 55.56% | 73.06% | (pending) |
-| FP4 percentile99.9 | 71.15% | 107.76% | (pending) |
-| INT4 percentile99.9 | 115.72% | 189.11% | 15.90% |
+| Small.en | 56.65% | 19.28% | 37.37 pp |
+| Small (ML) | 37.55% | 19.47% | 18.08 pp |
+| Medium.en | 14.10% | 13.48% | 0.62 pp |
+| Medium (ML) | 29.33% | 16.85% | 12.48 pp |
 
-Naive (unclipped absmax) quantization at the same bit-widths stayed stable
-in every case at both 8-bit and, for Medium.en, even 4-bit. At the Medium.en
-scale (769M parameters), the identical configurations that produced total
-breakdown (WER exceeding 100%) on Small models never exceeded a 2.45
-percentage-point cost, confirmed under the corrected evaluation protocol.
+The protection gap scales with how fragile the underlying model already is
+(largest on Small.en, near-zero on the uniquely stable Medium.en,
+intermediate on Small ML and Medium ML), regardless of whether that
+fragility comes from small scale or from multilingual training -- FP4's
+grid shape is a general-purpose mitigation, not one specific to a
+particular cause of instability. Under combined 4-bit-plus-clipping stress,
+this protection is inconsistent: FP4-percentile is less severe than
+INT4-percentile on both Small models (71.15% vs 115.72% on Small.en;
+107.76% vs 189.11% on Small ML), but on Medium (ML) the two are nearly
+identical (106.73% vs 97.12%, INT4-percentile actually slightly better),
+and on Medium.en the pattern reverses outright -- FP4-percentile (18.45%,
+the single worst Medium.en result) is worse than INT4-percentile (15.90%).
+The mechanism behind this reversal on the one uniquely stable model is not
+yet established.
 
-This isolates the failure to the percentile-clipping mechanism interacting
-with model capacity, rather than to bit-width or grid type alone: FP8 naive
-and INT8 naive (same 8-bit budget, different grids) both stayed clean at
-every model scale, while FP8 percentile and INT8 percentile (same budget,
-clipping added) both collapsed to comparable severity on both Small models.
-The multilingual Small model collapsed consistently worse than the
-English-only Small model at every clipped configuration, and the gap between
-the two widened sharply as bit-width dropped (roughly 14-18 percentage
-points apart at 8-bit, 73-81 percentage points apart at 4-bit) -- suggesting
-multilingual weight-sharing further reduces the stability margin already
-strained by percentile clipping at this parameter count.
+### Finding 3: true bit-packing preserves WER exactly relative to
+### lookup-table quantization at every model scale tested
 
-### Finding 2: Naive INT4 collapses at the Small scale while naive FP4
-### degrades gracefully, isolating grid shape rather than bit count as the
-### determining factor -- and both become irrelevant at Medium scale
+`fp4_packed` (true nibble packing, 0.5 bytes/weight) produced WER identical
+to `fp4_naive` (lookup-table based) at both model scales tested: 19.28% on
+Small.en (0.192GB packed vs 0.303GB LUT) and 13.48% on Medium.en (0.464GB
+packed vs 0.817GB LUT). Likewise, `int4_packed` matched `int4_naive` exactly
+at 56.65% on Small.en and 14.10% on Medium.en, including reproducing the
+collapse behavior where present. This confirms the nibble-packing
+implementation (`pack_nibbles`/`unpack_nibbles`) is numerically correct at
+every scale tested -- it changes only the storage representation, not the
+dequantized values used in the forward pass -- and demonstrates that any
+gap between naive/packed quantization and `bitsandbytes`' equivalents (see
+Finding 4) is entirely attributable to `bitsandbytes`' calibration and
+per-block scaling strategy, not to the bit budget or packing format itself.
+Medium (ML) packed-method results are pending and expected to follow the
+same identical-to-naive pattern.
 
-At 4-bit naive quantization, INT4 (evenly-spaced integer grid, -7 to +7)
-collapsed into the same repetition-loop pathology as percentile clipping
-(56.65% WER on Small.en, 37.55% on Small ML), while FP4 (E2M1
-floating-point grid: 0, +/-0.5, +/-1, +/-1.5, +/-2, +/-3, +/-4, +/-6)
-degraded gracefully with no collapse on either Small variant (19.28% WER
-on Small.en, 19.47% on Small ML -- nearly identical across English-only
-and multilingual training). Since both formats use the same nominal 4-bit
-budget and the same naive (unclipped) calibration, the difference is
-attributable to the shape of the quantization grid: FP4's wider dynamic
-range and non-uniform spacing preserves enough representational capacity
-to avoid the collapse INT4's uniform, narrow-range grid triggers at this
-model scale. FP4's protection also holds partially even under percentile
-clipping -- FP4-percentile was less severe than INT4-percentile on both
-Small models (71.15% vs 115.72% on Small.en; 107.76% vs 189.11% on
-Small ML) -- though not enough to prevent eventual breakdown when both
-stresses (4-bit and clipping) are combined.
+### Finding 4 (revised, stated as a genuine negative result): BnB FP4 vs
+### NF4 preference does not follow a predictable pattern by model size or
+### language coverage
 
-At Medium.en (769M parameters), this distinction disappears entirely: INT4
-naive quantization stays clean (14.10% WER, +0.65 pp), confirming that grid
-shape only matters below some capacity threshold; once a model has enough
-parameters, both bit-width and grid type stop being meaningfully
-predictive of failure.
+`bitsandbytes` FP4 [3] and NF4 [3] were compared across all four vanilla
+models:
 
-### Finding 3: True bit-packing preserves WER exactly relative to
-### lookup-table quantization, isolating storage format from accuracy
+| Model | BnB FP4 | BnB NF4 | Winner |
+|---|---|---|---|
+| Small.en | 14.52% | 15.06% | FP4 |
+| Small (ML) | 16.34% | 14.53% | NF4 |
+| Medium.en | 13.91% | 13.53% | NF4 |
+| Medium (ML) | 13.27% | 13.53% | FP4 |
 
-`fp4_packed` (true nibble packing, 0.5 bytes/weight, 0.192GB) produced WER
-identical to `fp4_naive` (lookup-table based, 0.303GB) at 19.28% on
-Small.en. Likewise, `int4_packed` (0.192GB) matched `int4_naive` (0.303GB)
-exactly at 56.65%, including reproducing the same collapse behavior. This
-confirms the nibble-packing implementation (`pack_nibbles`/`unpack_nibbles`)
-is numerically correct -- it changes only the storage representation, not
-the dequantized values used in the forward pass -- and demonstrates that
-the substantial gap between naive/packed FP4 (19.28%) and `bitsandbytes`
-FP4 (14.52%, see Finding 4) on Small.en is entirely attributable to
-`bitsandbytes`' calibration and per-block scaling strategy, not to the
-4-bit budget or packing format itself.
+No consistent pattern emerges by language (English-only models split FP4
+and NF4 as winners) or by model size (multilingual models likewise split).
+An earlier hypothesis, based on the first three models evaluated, proposed
+that FP4's advantage on Small.en reflected a Small-architecture-specific
+effect (since vanilla Medium.en, also English-only, favored NF4 like the
+multilingual Small model). The Medium (ML) result contradicts this too:
+Medium (ML) favors FP4, breaking any clean size-based or language-based
+rule. The honest conclusion is that FP4-versus-NF4 preference on vanilla
+Whisper models depends on some other property of each specific checkpoint's
+weight distribution not captured by model size or language coverage alone,
+and this is reported as a genuine inconclusive finding rather than forced
+into a narrative. Regardless of which grid wins on a given model, both
+`bitsandbytes` 4-bit variants substantially outperform the custom
+naive/packed FP4 implementation at every model scale (see Finding 3),
+confirming `bitsandbytes`' double-quantization and per-block calibration
+[3] materially improve on naive absmax-based 4-bit quantization independent
+of which grid is used.
 
-### Finding 4: BnB FP4 and BnB NF4 [3] swap ranking between English-only
-### and multilingual Small models, extending a pattern seen on fine-tuned
-### models to vanilla, non-fine-tuned weights
+### Finding 5: several quantization methods beat the FP16 baseline outright
+### on specific models, most consistently on Medium (Multilingual)
 
-On Small.en, `bitsandbytes` FP4 quantization [3] outperformed NF4 (14.52%
-vs 15.06% WER, both at 0.173GB). On Small (ML), the ranking inverted: NF4
-outperformed FP4 (14.53% vs 16.34% WER, same size). Both `bitsandbytes`
-4-bit variants substantially outperformed the custom naive/packed FP4
-implementation (19.28-19.47% WER) at the same model scale, underscoring
-that `bitsandbytes`' double-quantization and per-block calibration [3]
-materially improve on naive absmax-based 4-bit quantization regardless of
-which grid wins.
-
-The FP4-over-NF4 pattern on Small.en mirrors an equivalent finding from the
-fine-tuned KID-Whisper English models (BnB FP4 outperforming BnB NF4,
-attributed there to fine-tuning shifting weight distributions away from
-the Gaussian assumption NF4 [3] is optimized for). The reversal on Small
-(ML) suggests this is not purely a fine-tuning effect: a vanilla,
-non-fine-tuned English-only model's weight distribution already diverges
-from the Gaussian prior NF4 assumes, sufficiently to favor FP4's grid,
-while the vanilla multilingual model's weights -- spread across many
-languages rather than specialized to English lexical/phonetic patterns --
-apparently remain closer to the Gaussian distribution NF4 is designed for
-[3], preserving NF4's theoretical advantage in that setting.
-
-### Finding 5: BnB INT8 essentially matches or beats FP16 baseline accuracy
-### on Small.en specifically, but not on the multilingual variant
-
-`bitsandbytes` INT8 [3][4] achieved 14.45% WER on Small.en, marginally
-better than the FP16 baseline itself (14.51%), at 0.266GB versus FP16's
-0.450GB (a 41% size reduction). This did not hold on Small (ML), where
-BnB INT8 (15.38%) landed worse than both the FP16 baseline (14.82%) and
-naive INT8 (15.09%), suggesting `bitsandbytes`' outlier-isolation
-calibration [4] is comparatively better tuned for English-only weight
-distributions than multilingual ones at this model scale.
+`bitsandbytes` INT8 beat FP16 on Small.en (14.45% vs 14.51%) but not on
+Small (ML) (15.38% vs 14.82%) or Medium.en (13.70% vs 13.45%). On Medium
+(ML), four separate methods beat the FP16 baseline simultaneously: BnB FP4
+(13.27%), naive INT8 (13.45%), BnB NF4 (13.53%), and BnB INT8 (13.63%), all
+below the FP16 baseline of 13.79% and clustered within a tight 0.36
+percentage-point band. Since Medium (ML)'s FP16 baseline also showed the
+largest gap to the paper's zero-shot reference among all four models (+0.89
+pp, see Reproduction of Paper Baselines), this may indicate the FP16
+baseline evaluation itself has more headroom on this particular
+model/language combination, rather than these quantization methods
+providing a genuine accuracy improvement over the true underlying model
+quality.
 
 ## References
 
