@@ -654,6 +654,92 @@ Fine-tuned domain-specific models require hand-designed structural grids (FP4 E2
 
 ---
 
+## ✅ Week 8 | Magnitude Pruning Experiments (Ongoing)
+
+**Method:** Per-layer magnitude pruning - for each Linear layer, zero out the smallest `sparsity` fraction of weights by absolute magnitude. Non-linear layers (Conv1D, LayerNorm, embeddings) preserved at full precision.
+
+**Protocol:** Same corrected pipeline as Week 7 - HuggingFace `pipeline(chunk_length_s=30)`, Beam-5, batch=4, EnglishTextNormalizer. Full 3,972 test chunks.
+
+**Script:** `21_magnitude_pruning.py` (508 lines). Sparsity levels tested progressively one-by-one rather than batch sweep to allow analysis of cliff position between runs.
+
+### KID-Whisper Small-EN Magnitude Pruning Results
+
+*Model: aadel4/kid-whisper-small-en-myst, FP16 baseline: 9.16% WER*
+
+| Sparsity | WER% | vs FP16 | Regime |
+|---|---|---|---|
+| 0% (FP16) | 9.16% | — | Baseline |
+| **10%** | **9.01%** | **-0.15%** | ✅ Regularization sweet spot (beats FP16) |
+| 20% | 9.16% | 0.00% | ✅ Lossless plateau |
+| 30% | 9.34% | +0.18% | ✅ Near-lossless |
+| 40% | 11.00% | +1.84% | ⚠️ Cliff begins |
+| 45% | 18.06% | +8.90% | ⚠️ Cliff transition |
+| 50% | 279.78% | +270.62% | ❌ Catastrophic breakdown |
+
+**Small-EN key findings:**
+- **Maximum safe deployment sparsity: 40%** (WER stays under +2% of FP16)
+- **Regularization at 10% pruning** improves WER by 0.15% - analogous to Rule 10 (domain regularization at INT8/FP8 for fine-tuned models); pruning noise removes overfit patterns
+- **Cliff sharply between 45% and 50%**: WER jumps from 18.06% to 279.78% - a 15x degradation in a single 5% sparsity increment
+- **RTF at 50% sparsity**: 0.088 (5x slower than unpruned 0.017), signaling model generates max-length tokens (hallucination signal)
+- **Contradicts common LLM pruning literature** (Han et al. 2016, Frankle & Carbin 2019) which claims 50% sparsity is lossless for large models - fine-tuned children's ASR is fundamentally more fragile due to specialized weight patterns from domain adaptation
+
+### KID-Whisper Medium-EN Magnitude Pruning Results (Partial)
+
+*Model: aadel4/kid-whisper-medium-en-myst, FP16 baseline: 8.94% WER*
+
+| Sparsity | WER% | vs FP16 | Regime |
+|---|---|---|---|
+| 0% (FP16) | 8.94% | — | Baseline |
+| 10% | 8.90% | -0.04% | ✅ Regularization |
+| 20% | 8.92% | -0.02% | ✅ Lossless |
+| **30%** | **8.88%** | **-0.06%** | ✅ Best pruning result (beats FP16) |
+| 40% | 21.25% | +12.31% | ❌ CLIFF at 40% |
+| 45% | pending | | |
+| 50% | pending | | |
+
+**Novel Medium-EN finding - Capacity does NOT extend pruning cliff position:**
+- Medium-EN cliff at 40% (WER +12.31%) is STEEPER than Small-EN cliff at 40% (WER +1.84%)
+- Contradicts our Rule 8 hypothesis (Medium capacity extends quantization safety zone)
+- **Pruning fundamentally different from quantization**: quantization ADDS noise (all weights preserved) while pruning REMOVES weights (information permanently lost)
+- Capacity can absorb quantization noise but cannot recreate removed weights
+- Deeper networks may amplify pruning damage through longer information chains, creating more sudden failure modes
+- Both variants have maximum safe sparsity around 30-40% regardless of model size (unlike quantization where Medium was much more forgiving)
+
+### Cross-Model Pruning Comparison
+
+| Sparsity | Small-EN WER | Medium-EN WER | Interpretation |
+|---|---|---|---|
+| 10% | 9.01% | 8.90% | Both regularization |
+| 20% | 9.16% | 8.92% | Both lossless |
+| 30% | 9.34% | 8.88% | Medium slightly better |
+| **40%** | **11.00%** | **21.25%** | **Medium fails MORE at cliff** |
+| 45% | 18.06% | pending | |
+| 50% | 279.78% | pending | |
+
+**Comparison with Week 7 quantization findings:**
+
+| Aspect | Quantization (Week 7) | Pruning (Week 8) |
+|---|---|---|
+| Small-EN 4-bit degradation | FP4 naive: +3.17% (mild cliff) | 45% pruned: +8.90% (mid cliff) |
+| Medium-EN 4-bit degradation | FP4 naive: +0.28% (near-lossless) | 40% pruned: +12.31% (steep cliff) |
+| Capacity effect | Rule 8: Medium absorbs 4-bit damage | INVERTED: Medium equally or MORE fragile |
+| Regularization at safe levels | Rule 10: INT8 improves fine-tuned | 10% pruning improves fine-tuned |
+| Cliff sharpness | 4-bit → 2-bit gradual | 45% → 50% catastrophic |
+
+### Storage Note
+
+Pruned models still stored as dense FP16 (0.450 GB for Small, 1.423 GB for Medium) since sparse storage formats (CSR, COO, bitmask) only become efficient at >66% sparsity. Real size reduction requires either combining pruning with quantization or using specialized sparse kernels (Nvidia Ampere+ 2:4 pattern). This is future work direction for the thesis.
+
+**References:**
+- Han et al. 2015, "Learning both Weights and Connections for Efficient Neural Networks", NeurIPS
+- Han et al. 2016, "Deep Compression", ICLR
+- Frankle & Carbin 2019, "The Lottery Ticket Hypothesis", ICLR (arXiv:1803.03635)
+- Sun et al. 2023, "Wanda: A Simple and Effective Pruning Approach for Large Language Models" (arXiv:2306.11695)
+- Frantar & Alistarh 2023, "SparseGPT" (arXiv:2301.00774)
+- Lai et al. 2021, "PARP: Prune, Adjust and Re-Prune" (arXiv:2106.05933)
+
+---
+
 ## 📊 Experiment Results
 
 ### Baselines - Whisper Large-v3, MyST Test Set (filtered, 3,972 chunks)
@@ -747,6 +833,7 @@ Fine-tuned domain-specific models require hand-designed structural grids (FP4 E2
 | Week 5 | Custom FP4 E2M1+pct + LoRA fine-tuning. Optimal: r=16 q+v 500 steps → 13.77% WER (-0.26% vs zero-shot). Key findings: exposure bias limits training to ~500 steps; use_reentrant=False required for gradient checkpointing; larger LoRA (r=32+fc1) worse due to 4× amplification. Scheduled sampling (embedding mixing) did not help. | ✅ Done |
 | Week 6 | KID-Whisper multilingual Small + Medium PTQ (old protocol). Small-myst best: INT8 naive 11.35% / BnB NF4 11.44% 0.173 GB. Medium-en best: BnB FP4 10.98% (beats FP16!). Key rules: naive > pct for fine-tuned; INT8/FP8 lossless for 769M; grid irrelevant at scale; FP2 no-zero → 713% WER. | ✅ Done |
 | Week 7 | Corrected protocol + K-means codebook. Small-EN best: FP8 naive 8.99% beats paper. Medium-EN best: BnB FP4 8.93% matches paper at 0.438 GB. K-means: Small-EN catastrophic all k; Medium-EN kmeans_k256 9.16% matches FP8 (fixed grids still win at 4-bit). Novel finding: learned codebooks need Gaussian distribution + model capacity + enough centroids. | ✅ Done |
+| Week 8 | Magnitude pruning study (script 21_magnitude_pruning.py, per-layer method, corrected pipeline protocol). Small-EN full curve: 10% 9.01% (regularization), 20% lossless, 30% 9.34%, 40% 11.00% (cliff begins), 45% 18.06%, 50% 279.78% (catastrophic). Medium-EN partial: 10% 8.90%, 20% 8.92%, 30% 8.88% (beats FP16), 40% 21.25% (cliff). Novel finding: capacity does NOT extend pruning cliff (unlike quantization) - both variants fail at similar 40-45% boundary. Pruning removes info permanently while quantization only adds noise. Medium-EN 45%/50% pending. | 🔄 In progress |
 
 ---
 
@@ -772,6 +859,10 @@ Fine-tuned domain-specific models require hand-designed structural grids (FP4 E2
 | [16] | Banner, R., Nahshan, Y., Hoffer, E., & Soudry, D. (2019). *Post Training 4-bit Quantization of Convolutional Networks for Rapid-Deployment (ACIQ).* NeurIPS 2019. arXiv:1810.05723. |
 | [17] | Wu, H., et al. (2020). *Integer Quantization for Deep Learning Inference: Principles and Empirical Evaluation.* NVIDIA Technical Report. arXiv:2004.09602. |
 | [18] | Nagel, M., et al. (2021). *A White Paper on Neural Network Quantization.* Qualcomm AI Research. arXiv:2106.08295. |
+
+---
+
+*Last updated: Week 8 (Magnitude pruning study - Small-EN complete, Medium-EN in progress)*
 
 ---
 
