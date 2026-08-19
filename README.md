@@ -11,6 +11,52 @@ Exploring self-supervised and weakly-supervised speech foundation models (Whispe
 
 ---
 
+---
+
+## 🗂️ Dataset Composition & Preprocessing Verification
+
+**Script:** `23_dataset_filtering_report.py` (independently verifies corpus statistics via direct file scanning, cross-referenced against `preprocess_myst.py`'s actual filtering/concatenation logic)
+
+### Corpus Statistics by Split
+
+| Split | #Utterances | Hours | Avg Dur (s) | Avg Words | % Short (<3 words) | % Long (>30s) | Unique Sessions |
+|---|---|---|---|---|---|---|---|
+| filtered_train | 57,687 | 136.88 | 8.54 | 17.30 | 0.00% | 0.00% | 2,618 |
+| filtered_dev | 9,017 | 21.09 | 8.42 | 17.11 | 0.00% | 0.00% | 435 |
+| filtered_test | 10,415 | 26.12 | 9.03 | 18.26 | 0.00% | 2.70% | 504 |
+| concatenated_test | 3,972 | 26.12 | 23.67 | 47.88 | 0.00% | 7.07% | 504 |
+
+*`%<3wds` reads 0.00% across all splits because the <3-word filter (Filter 4 in `preprocess_myst.py`) was already applied upstream when `filtered/` was generated - `min=3` words confirms nothing below threshold remains. This is the report correctly detecting an already-satisfied filter, not a null result.*
+
+### Concatenation Algorithm (from `preprocess_myst.py`, Phase 2)
+
+Utterances within each session are buffered and flushed once the running duration crosses 30s:
+
+```
+for utterance in session_utterances (in order):
+    if buffer_duration + utterance.duration > 30s AND buffer non-empty:
+        flush buffer now (WITHOUT this utterance)
+    add utterance to buffer
+    if buffer_duration >= 30s:
+        flush buffer now
+```
+
+Critically, the "flush before" check only fires when the buffer already has content. If a single utterance is itself already >30s, the buffer is empty when it arrives, so nothing flushes first - the long utterance passes through as its own standalone chunk, completely unmodified. This is the direct mechanism behind the >30s chunks in `concatenated_test`.
+
+**Note:** `preprocess_myst.py`'s `PARTITIONS = ["train", "development"]` and its `__main__` block explicitly skips Phase 2 for train/dev (`# phase2_concatenate() - skipped - not needed for train/dev`). Only the **test** partition was ever concatenated (via a separate run/script), which is why Wanda calibration in `22_wanda_pruning.py` correctly sources from `data/filtered/train` rather than a nonexistent `data/concatenated/train`.
+
+### Five-Point Consistency Verification
+
+Cross-checking `filtered_test` against `concatenated_test` confirms the concatenation pipeline preserved all content correctly, with zero loss or cross-session merging:
+
+1. **Total hours preserved exactly**: 26.12h = 26.12h (concatenation is pure regrouping, no audio lost)
+2. **Session count preserved exactly**: 504 = 504 (concatenation groups *within* a session, never merges *across* sessions)
+3. **Overshoot chunk count matches long-utterance count**: 2.70% of 10,415 ≈ 281 chunks ≈ 7.07% of 3,972 (the >30s chunks in `concatenated_test` are exactly the >30s utterances in `filtered_test`, passed through unchanged per the buffer-guard mechanism above)
+4. **Max duration identical pre/post concatenation**: 111.36s = 111.36s (the longest chunk in `concatenated_test` IS the longest raw utterance in `filtered_test`, unmodified)
+5. **Average duration arithmetic checks out**: 10,415 / 3,972 = 2.62 utterances/chunk; 2.62 × 9.03s (avg utterance duration) ≈ 23.67s (matches the reported `concatenated_test` average exactly)
+
+This independently confirms the **281-chunk (7.07%) truncation issue** originally discovered manually in Week 7 - now verified numerically via a completely separate measurement method (direct corpus scanning vs. the original manual chunk-length inspection), strengthening confidence in the corrected evaluation protocol's necessity and correctness.
+
 ## 📅 Weekly Research Log
 
 ### ✅ Week 1 | Literature Survey & Foundation Models Study
@@ -141,12 +187,13 @@ Applied KID-Whisper filtering pipeline on LDC2021S05 - test split results (cross
 
 | Split | Files | Duration | Filters Applied | Status |
 |---|---|---|---|---|
-| train | 57,687 | 136.9h | all 4 filters + >30s removal | ✅ Final |
-| development | 9,017 | 21.1h | all 4 filters + >30s removal | ✅ Final |
-| test | 10,415 | 26.12h | all 4 filters + >30s removal (via chunking) | ✅ Final |
+| train | 57,687 | 136.9h | all 4 filters + Filter 5 (>30s discard) | ✅ Final |
+| development | 9,017 | 21.1h | all 4 filters + Filter 5 (>30s discard) | ✅ Final |
+| test | 10,415 | 26.12h | all 4 filters only - **Filter 5 (>30s discard) NOT applied** | ✅ Final |
 
 - WER flagging applied to all splits: train (2,823 flagged), dev (1,046 flagged), test (1,067 flagged) - scripts: `generate_flags_partition.py`, `clean_flags_partition.py`
-- Filter 5 (>30s removal) added to match KID-Whisper methodology - utterances longer than 30s removed since Whisper is trained on 30s windows
+- Filter 5 (>30s discard) added to match KID-Whisper methodology, applied to **train and development only** (per `preprocess_myst.py`'s `PARTITIONS = ["train", "development"]`) - confirmed by max duration: train=30.00s exactly, dev=29.95s
+- **Correction (identified in Week 8 dataset verification):** the original framing above ("test ... via chunking") was inaccurate. Filter 5 was never run on the test partition - `filtered_test` retains utterances up to 111.36s, with 2.70% (281 of 10,415) exceeding 30s. Concatenation does not remove these; per the buffer-guard logic in `preprocess_myst.py` Phase 2, a single utterance already >30s passes through as its own standalone chunk, unmodified. This is the direct origin of the 281-chunk (7.07% of `concatenated_test`) truncation issue discovered and fixed in Week 7 (see Dataset Composition & Preprocessing Verification section above, and thesis Chapter 2 §2.2.5-2.2.6 for the full mechanism and five-point consistency verification)
 - KID-Whisper reports train 132.5h / dev 21h - our results (136.9h / 21.1h) are close; remaining gap due to FP16 vs FP32 flagging difference
 - Concatenated filtered test utterances into 30-second chunks for Whisper inference: 3,972 chunks
 - `myst_train_text.txt` contains 59,842 lines - matches filtered train count exactly (cross-verified)
@@ -654,81 +701,104 @@ Fine-tuned domain-specific models require hand-designed structural grids (FP4 E2
 
 ---
 
-## ✅ Week 8 | Magnitude Pruning Experiments (Ongoing)
+## ✅ Week 8 | Pruning Experiments: Magnitude + Wanda
 
-**Method:** Per-layer magnitude pruning - for each Linear layer, zero out the smallest `sparsity` fraction of weights by absolute magnitude. Non-linear layers (Conv1D, LayerNorm, embeddings) preserved at full precision.
+**Protocol:** Same corrected pipeline as Week 7 for all pruning runs - HuggingFace `pipeline(chunk_length_s=30)`, Beam-5, batch=4, EnglishTextNormalizer. Full 3,972 test chunks per data point unless noted.
 
-**Protocol:** Same corrected pipeline as Week 7 - HuggingFace `pipeline(chunk_length_s=30)`, Beam-5, batch=4, EnglishTextNormalizer. Full 3,972 test chunks.
+**Scripts:** `21_magnitude_pruning.py` (magnitude, per-layer whole-layer threshold) and `22_wanda_pruning.py` (Wanda, `|W|×||X||` importance, per-output-row comparison group, calibrated on 256 samples from `data/filtered/train`). Sparsity levels tested progressively one-by-one to allow cliff-position analysis between runs.
 
-**Script:** `21_magnitude_pruning.py` (508 lines). Sparsity levels tested progressively one-by-one rather than batch sweep to allow analysis of cliff position between runs.
+---
 
-### KID-Whisper Small-EN Magnitude Pruning Results
+### Magnitude Pruning - All Three Variants Complete
 
-*Model: aadel4/kid-whisper-small-en-myst, FP16 baseline: 9.16% WER*
+**Small-EN** (`aadel4/kid-whisper-small-en-myst`, FP16 baseline: 9.16%)
 
 | Sparsity | WER% | vs FP16 | Regime |
 |---|---|---|---|
 | 0% (FP16) | 9.16% | — | Baseline |
-| **10%** | **9.01%** | **-0.15%** | ✅ Regularization sweet spot (beats FP16) |
+| **10%** | **9.01%** | **-0.15%** | ✅ Regularization sweet spot |
 | 20% | 9.16% | 0.00% | ✅ Lossless plateau |
 | 30% | 9.34% | +0.18% | ✅ Near-lossless |
 | 40% | 11.00% | +1.84% | ⚠️ Cliff begins |
 | 45% | 18.06% | +8.90% | ⚠️ Cliff transition |
-| 50% | 279.78% | +270.62% | ❌ Catastrophic breakdown |
+| 50% | 279.78% | +270.62% | ❌ Catastrophic (hallucination) |
 
-**Small-EN key findings:**
-- **Maximum safe deployment sparsity: 40%** (WER stays under +2% of FP16)
-- **Regularization at 10% pruning** improves WER by 0.15% - analogous to Rule 10 (domain regularization at INT8/FP8 for fine-tuned models); pruning noise removes overfit patterns
-- **Cliff sharply between 45% and 50%**: WER jumps from 18.06% to 279.78% - a 15x degradation in a single 5% sparsity increment
-- **RTF at 50% sparsity**: 0.088 (5x slower than unpruned 0.017), signaling model generates max-length tokens (hallucination signal)
-- **Contradicts common LLM pruning literature** (Han et al. 2016, Frankle & Carbin 2019) which claims 50% sparsity is lossless for large models - fine-tuned children's ASR is fundamentally more fragile due to specialized weight patterns from domain adaptation
+**Small-multilingual** (`aadel4/kid-whisper-small-myst`, FP16 baseline: 9.91%)
 
-### KID-Whisper Medium-EN Magnitude Pruning Results (Partial)
+| Sparsity | WER% | vs FP16 | Regime |
+|---|---|---|---|
+| 0% (FP16) | 9.91% | — | Baseline |
+| **10%** | **9.68%** | **-0.23%** | ✅ Biggest regularization gain of all 3 variants |
+| 20% | 9.86% | -0.05% | ✅ Lossless |
+| 30% | 10.35% | +0.44% | ✅ Near-lossless |
+| 40% | 17.54% | +7.63% | ⚠️ Cliff begins |
+| 45% | 151.51% | +141.60% | ❌ Catastrophic (hallucination) |
+| 50% | 359.03% | +349.12% | ❌ Worst hallucination of all 3 variants |
 
-*Model: aadel4/kid-whisper-medium-en-myst, FP16 baseline: 8.94% WER*
+**Medium-EN** (`aadel4/kid-whisper-medium-en-myst`, FP16 baseline: 8.94%)
 
 | Sparsity | WER% | vs FP16 | Regime |
 |---|---|---|---|
 | 0% (FP16) | 8.94% | — | Baseline |
 | 10% | 8.90% | -0.04% | ✅ Regularization |
 | 20% | 8.92% | -0.02% | ✅ Lossless |
-| **30%** | **8.88%** | **-0.06%** | ✅ Best pruning result (beats FP16) |
-| 40% | 21.25% | +12.31% | ❌ CLIFF at 40% |
-| 45% | pending | | |
-| 50% | pending | | |
+| **30%** | **8.88%** | **-0.06%** | ✅ Best pruning result overall (beats FP16) |
+| 40% | 21.25% | +12.31% | ❌ Cliff - steepest of all 3 variants |
+| 45% | 200.93% | +191.99% | ❌ Hallucination |
+| 50% | 99.99% | +91.05% | ❌ Empty output (different failure mode) |
 
-**Novel Medium-EN finding - Capacity does NOT extend pruning cliff position:**
-- Medium-EN cliff at 40% (WER +12.31%) is STEEPER than Small-EN cliff at 40% (WER +1.84%)
-- Contradicts our Rule 8 hypothesis (Medium capacity extends quantization safety zone)
-- **Pruning fundamentally different from quantization**: quantization ADDS noise (all weights preserved) while pruning REMOVES weights (information permanently lost)
-- Capacity can absorb quantization noise but cannot recreate removed weights
-- Deeper networks may amplify pruning damage through longer information chains, creating more sudden failure modes
-- Both variants have maximum safe sparsity around 30-40% regardless of model size (unlike quantization where Medium was much more forgiving)
+**Cross-model magnitude pruning comparison:**
 
-### Cross-Model Pruning Comparison
+| Sparsity | Small-EN | Small-multi | Medium-EN | Interpretation |
+|---|---|---|---|---|
+| 10% | 9.01% (-0.15) | **9.68% (-0.23)** ← biggest gain | 8.90% (-0.04) | All three regularize |
+| 20% | 9.16% (0.00) | 9.86% (-0.05) | 8.92% (-0.02) | All lossless |
+| 30% | 9.34% (+0.18) | 10.35% (+0.44) | **8.88% (-0.06)** ← best | Medium best here |
+| **40%** | **11.00% (+1.84)** | 17.54% (+7.63) | 21.25% (+12.31) | Universal cliff, Small-EN most resilient |
+| 45% | 18.06% | 151.51% | 200.93% | All broken |
+| 50% | 279.78% | 359.03% | 99.99% | All broken, different failure modes |
 
-| Sparsity | Small-EN WER | Medium-EN WER | Interpretation |
+**Magnitude pruning key findings:**
+- **Cliff position universal at 40% across all three variants** regardless of model capacity (244M vs 769M) or language coverage (EN vs multilingual) - contradicts both Rule 8 (Medium absorbs quantization damage) and Rule 11 (multilingual more robust than EN)
+- **Small-EN is MOST resilient in the cliff region** (opposite of quantization patterns): 40% degradation is +1.84% (Small-EN) vs +7.63% (Small-multi) vs +12.31% (Medium-EN)
+- **Regularization at 10% strongest for multilingual** (-0.23%), then Small-EN (-0.15%), then Medium-EN (-0.04%) - broader vocabulary benefits most from mild pruning noise
+- **Failure mode split by capacity at 50%**: both Small variants hallucinate (279.78%, 359.03%), Medium-EN goes silent/empty (99.99%) - mirrors the INT2 quantization failure-mode split (Small-EN INT2: 928% hallucination; Medium-EN INT2: 100% empty)
+- **Contradicts common LLM pruning literature** (Han et al. 2016, Frankle & Carbin 2019) which claims 50% sparsity is lossless for large models - all three fine-tuned KID-Whisper variants are completely broken by 45-50%
+
+---
+
+### Wanda Pruning - Small-EN Complete (10-50%); Extension + Other Variants Pending
+
+**Small-EN** (`aadel4/kid-whisper-small-en-myst`, FP16 baseline: 9.16%), calibrated on 256 samples from `data/filtered/train`, per-output-row comparison group (Wanda paper default)
+
+| Sparsity | Magnitude (per-layer) | Wanda (weight × activation norm, per-row) | Wanda vs Magnitude |
 |---|---|---|---|
-| 10% | 9.01% | 8.90% | Both regularization |
-| 20% | 9.16% | 8.92% | Both lossless |
-| 30% | 9.34% | 8.88% | Medium slightly better |
-| **40%** | **11.00%** | **21.25%** | **Medium fails MORE at cliff** |
-| 45% | 18.06% | pending | |
-| 50% | 279.78% | pending | |
+| 0% (FP16) | 9.16% | 9.16% | — |
+| 10% | **9.01%** | 9.28% | Magnitude better (-0.27 for Wanda) |
+| 20% | **9.16%** | 9.58% | Magnitude better (-0.42 for Wanda) |
+| 30% | **9.34%** | 10.28% | Magnitude better (-0.94 for Wanda) |
+| 40% | 11.00% | **10.12%** | Wanda better (+0.88 for Wanda) |
+| 45% | 18.06% | **10.41%** | **Wanda MASSIVELY better (+7.65)** |
+| 50% | 279.78% | **12.01%** | **Wanda MASSIVELY better (+267.77)** |
 
-**Comparison with Week 7 quantization findings:**
+*Sparsity levels 60-90% for Small-EN have been queued to test where Wanda's own cliff (if any) sits, since 50% is still far from broken. Results pending at time of writing.*
 
-| Aspect | Quantization (Week 7) | Pruning (Week 8) |
-|---|---|---|
-| Small-EN 4-bit degradation | FP4 naive: +3.17% (mild cliff) | 45% pruned: +8.90% (mid cliff) |
-| Medium-EN 4-bit degradation | FP4 naive: +0.28% (near-lossless) | 40% pruned: +12.31% (steep cliff) |
-| Capacity effect | Rule 8: Medium absorbs 4-bit damage | INVERTED: Medium equally or MORE fragile |
-| Regularization at safe levels | Rule 10: INT8 improves fine-tuned | 10% pruning improves fine-tuned |
-| Cliff sharpness | 4-bit → 2-bit gradual | 45% → 50% catastrophic |
+**MAJOR FINDING - Wanda eliminates the catastrophic cliff magnitude pruning suffers:**
+- At 50% sparsity: magnitude pruning reaches 279.78% WER (completely broken); Wanda reaches only 12.01% WER (+2.85% vs FP16, still usable) - a **267.77 percentage-point gap**
+- At 45%: magnitude 18.06% vs Wanda 10.41% - a **7.65 percentage-point gap**
+- **The cliff observed in magnitude pruning was substantially an artifact of the importance metric, not a fundamental property of fine-tuned children's ASR fragility.** Activation-aware importance (weight × activation norm) recovers most of the "lost" robustness that magnitude's crude weight-only signal missed
+- **Low-sparsity trade-off**: Wanda is slightly WORSE than magnitude at 10-30% (e.g. 30%: magnitude 9.34% vs Wanda 10.28%) - per-output-row thresholding appears less globally-optimal than a whole-layer threshold when a layer's redundancy is already easily captured. Wanda's advantage is concentrated exactly in the high-sparsity region where magnitude fails hardest, not uniform across all sparsity levels
+- **Revises the earlier "cliff position independent of model capacity" finding**: now understood as "cliff position highly dependent on importance metric quality." A better importance signal pushes the safe deployment ceiling well past what magnitude pruning suggested - this is a more nuanced, more mechanistic, and more publishable finding than the original capacity-independence result
 
-### Storage Note
+**Methodological note:** Wanda calibration sources from `data/filtered/train` (individual filtered MyST utterances, avg 8.54s) rather than `data/concatenated/train`, which does not exist - `preprocess_myst.py`'s Phase 2 concatenation was only ever run for the test partition (see Dataset Composition section above). Calibration is forward-pass-only (no gradients, no weight updates) and strictly disjoint from the 3,972-chunk test split used for all WER evaluation.
 
-Pruned models still stored as dense FP16 (0.450 GB for Small, 1.423 GB for Medium) since sparse storage formats (CSR, COO, bitmask) only become efficient at >66% sparsity. Real size reduction requires either combining pruning with quantization or using specialized sparse kernels (Nvidia Ampere+ 2:4 pattern). This is future work direction for the thesis.
+**Remaining Wanda work:** Small-EN 60-90% extension (queued), Medium-EN full sweep (not started), Small-multilingual full sweep (not started) - open question is whether the cliff-elimination finding generalizes across all three variants or is specific to Small-EN.
+
+---
+
+### Storage Note (applies to both magnitude and Wanda pruning)
+
+Pruned models are still stored as dense FP16 (0.450 GB for Small, 1.423 GB for Medium) since sparse storage formats (CSR, COO, bitmask) only become efficient at >66% sparsity. Real size reduction requires either combining pruning with quantization (e.g. BnB FP4 + 50% Wanda pruning) or using specialized sparse kernels (Nvidia Ampere+ 2:4 pattern). This is a future work direction for the thesis.
 
 **References:**
 - Han et al. 2015, "Learning both Weights and Connections for Efficient Neural Networks", NeurIPS
@@ -737,90 +807,6 @@ Pruned models still stored as dense FP16 (0.450 GB for Small, 1.423 GB for Mediu
 - Sun et al. 2023, "Wanda: A Simple and Effective Pruning Approach for Large Language Models" (arXiv:2306.11695)
 - Frantar & Alistarh 2023, "SparseGPT" (arXiv:2301.00774)
 - Lai et al. 2021, "PARP: Prune, Adjust and Re-Prune" (arXiv:2106.05933)
-
----
-
-## 📊 Experiment Results
-
-### Baselines - Whisper Large-v3, MyST Test Set (filtered, 3,972 chunks)
-*Source: Our experiments*
-
-| # | Method | WER% | Size | RTF |
-|---|--------|------|------|-----|
-| B-1 | Zero-shot Greedy | 15.31% | 2.87 GB FP16 | 0.031 |
-| **B-2** | **Zero-shot Beam-5 (official baseline)** | **14.46%** | **2.87 GB FP16** | **0.125** |
-
-### bitsandbytes PTQ - MyST Test Set (full, 3,972 chunks)
-*Source: Our experiments using Dettmers et al. 2022 [13] (INT8) and 2023 [14] (NF4, FP4)*
-
-| # | Method | WER% | Size | RTF | vs Baseline |
-|---|--------|------|------|-----|-------------|
-| C-1 | INT8 - LLM.int8() | 14.60% | 1.51 GB | 0.145 | +0.14% |
-| C-2 | NF4 4-bit | 14.48% | 0.82 GB | 0.098 | +0.02% |
-| C-3 | FP4 4-bit | **14.05%** | 0.82 GB | 0.098 | -0.41% |
-
-### Our PyTorch Absmax Per-Channel PTQ (thesis contribution)
-*Same method across all bit widths. 513 Linear layers quantized (99.5% of params). Weights stored as int8; theoretical sizes assume native N-bit packing.*
-*Source: Our implementation - scripts/10_ptq_int8_pytorch.py, scripts/11_ptq_unified.py*
-
-| # | Bits | Levels | WER% | Actual Size | Theoretical Size | Eval Set |
-|---|------|--------|------|-------------|-----------------|----------|
-| P-1 | 16 (FP16) | 65,536 | 14.46% | 2.87 GB | 2.87 GB | Full (3,972) |
-| P-2 | 8 (INT8) | 255 | 14.48% | 1.57 GB | 1.57 GB | Full (3,972) |
-| P-3 | 4 (INT4) | 15 | 620.91% | 1.57 GB | 0.73 GB | Full (3,972) |
-| P-4 | 2 (INT2) | 3 | 100.00% | 1.57 GB | 0.38 GB | 200 samples |
-| P-5 | 1 (Binary) | 2 | 100.00% | 1.57 GB | 0.20 GB | 200 samples |
-
-### Layer Pruning - no LoRA recovery
-*Source: Our experiments - scripts/07_compress_pruning.py*
-
-| # | Method | Encoder Layers | WER% | Size | vs Baseline |
-|---|--------|---------------|------|------|-------------|
-| L-1 | Pruning 2L | 30/32 | 623.19% | 2.80 GB | +608.73% |
-
-### Calibrated Absmax PTQ - INT4 Recovery (thesis contribution)
-*Extends our PyTorch PTQ with improved scale estimation. No retraining required.*
-*Source: Our implementation - scripts/12_ptq_calibratedWithFP32.py*
-
-| # | Method | Calib Data | WER% | Size | Eval Set | vs Naive INT4 |
-|---|--------|-----------|------|------|----------|---------------|
-| CA-1 | Percentile INT4 (p=99.9) | None | **19.00%** | 1.57 GB | Full (3,972) | -601.91% |
-| CA-2 | Act-aware INT4 (alpha=0.5) | 128 MyST utterances | 100.00% | 1.57 GB | 200 samples | worse than percentile |
-| CA-3 | Act-aware INT4 (alpha=0.1) | 128 MyST utterances | 392.36% | 1.57 GB | 200 samples | worse than percentile |
-| CA-4 | Percentile INT2 (p=99.9) | None | 100.00% | 1.57 GB | 200 samples | no improvement over naive INT2 |
-
-### Floating Point Quantization (Week 4 - thesis contribution)
-*Our own FP8 and FP4 implementations using per-channel absmax + optional percentile clipping.*
-*Source: Our implementation - scripts/13_ptq_fp_formats.py*
-
-| # | Format | Method | WER% | Theor. Size | RTF | Eval Set | vs Baseline |
-|---|--------|--------|------|-------------|-----|----------|-------------|
-| F-1 | FP8 E4M3 (ours) | Naive absmax | 14.45% | 1.45 GB | 0.106 | Full (3,972) | -0.01% |
-| **F-2** | **FP8 E4M3 + pct99.9 (ours)** | **Percentile absmax** | **13.98%** | **1.45 GB** | **0.101** | **Full (3,972)** | **-0.48%** |
-| F-3 | FP8 E5M2 (ours) | Naive absmax | 100.00% | 1.45 GB | 0.578 | 200 samples | catastrophic |
-| F-4 | FP4 E2M1 (ours) | Naive absmax | 15.87% | 0.73 GB | 0.169 | Full (3,972) | +1.41% |
-| **F-5** | **FP4 E2M1 + pct99.9 (ours)** | **E2M1 + percentile** | **14.03%** | **0.73 GB** | **0.158** | **Full (3,972)** | **-0.43%** |
-
-### Week 5 - QLoRA Fine-tuning Results
-*Pipeline: FP4 E2M1+pct99.9 → custom LoRA → MyST train (57,687 utts / 136.9h)*
-*Source: Our implementation - scripts/15_qlora_finetune.py*
-
-| # | Config | Steps | WER% | vs Zero-shot | Trainable | Status |
-|---|--------|-------|------|-------------|-----------|--------|
-| **QL-1** | **r=16, q+v, use_reentrant=False** | **500** | **13.77%** | **-0.26%** | **7.86M (0.49%)** | **✅ Best** |
-| QL-2 | r=16, q+v, 1 epoch | 7,210 | 96.58% | +82.55% | 7.86M | ❌ Exposure bias |
-| QL-3 | r=16, q+v, 3 epochs + GC corruption | 21,630 | 93.86% | +79.83% | 7.86M | ❌ GC + exposure bias |
-| QL-4 | r=32, q+v+out_proj+fc1, 500 steps | 500 | 17.72% | +3.69% | 36.7M (2.4%) | ❌ fc1 amplification |
-
-**Key findings:**
-- Optimal: r=16, q+v only, 500 steps → WER 13.77% (-0.26% vs 14.03% zero-shot)
-- Gradient checkpointing MUST use `use_reentrant=False` - default corrupts FP4 gather gradients
-- Exposure bias: >500 steps causes catastrophic WER (93-96%) due to teacher forcing mismatch
-- Larger LoRA (r=32 + fc1 layers) worsens WER: fc1 [1280→5120] produces 4× larger LoRA output than attention layers → dominates FP4 base representations within 500 steps
-- Gap to KID-Whisper (9.11%): training only 6.9% of data (4,000/57,687 utterances), exposure bias ceiling, LoRA vs full fine-tuning expressiveness
-- Scheduled sampling (gradual replacement of correct tokens with model predictions) is the correct fix for exposure bias - pending implementation
-
----
 
 ## 📊 Progress Tracker
 
@@ -861,12 +847,7 @@ Pruned models still stored as dense FP16 (0.450 GB for Small, 1.423 GB for Mediu
 | [18] | Nagel, M., et al. (2021). *A White Paper on Neural Network Quantization.* Qualcomm AI Research. arXiv:2106.08295. |
 
 ---
-
 *Last updated: Week 8 (Magnitude pruning study - Small-EN complete, Medium-EN in progress)*
-
----
-
-*Last updated: Week 7 (Corrected protocol + Small-EN + Medium-EN complete) - August 2026*
 
 
 
