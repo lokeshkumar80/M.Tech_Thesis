@@ -780,21 +780,85 @@ Fine-tuned domain-specific models require hand-designed structural grids (FP4 E2
 | 40% | 11.00% | **10.12%** | Wanda better (+0.88 for Wanda) |
 | 45% | 18.06% | **10.41%** | **Wanda MASSIVELY better (+7.65)** |
 | 50% | 279.78% | **12.01%** | **Wanda MASSIVELY better (+267.77)** |
+| 55% | N/T | 16.45% | Wanda degrading (+7.29 vs FP16) |
+| 60% | N/T (magnitude not extended) | 55.58% | Wanda's own cliff edge (9x steeper than 50→55 step) |
+| 70% | N/T | 118.84% | Wanda broken (hallucination) |
+| 80% | N/T | 99.92% | Wanda broken (failure mode shifts toward empty output) |
+| 90% | N/T | Not run (already broken by 70-80%, low added value) | |
 
-*Sparsity levels 60-90% for Small-EN have been queued to test where Wanda's own cliff (if any) sits, since 50% is still far from broken. Results pending at time of writing.*
+*Extension to 55-80% confirms Wanda has its own cliff - it does not eliminate cliff behavior entirely, it relocates it substantially further out. 90% was not run (model already broken by 70-80%, additional data point judged low-value). The cliff has a gradual onset (50→55%: +4.44 points) followed by a sharp edge (55→60%: +39.13 points, 9x steeper) - the transition is concentrated specifically in the 55-60% window.*
 
-**MAJOR FINDING - Wanda eliminates the catastrophic cliff magnitude pruning suffers:**
-- At 50% sparsity: magnitude pruning reaches 279.78% WER (completely broken); Wanda reaches only 12.01% WER (+2.85% vs FP16, still usable) - a **267.77 percentage-point gap**
-- At 45%: magnitude 18.06% vs Wanda 10.41% - a **7.65 percentage-point gap**
-- **The cliff observed in magnitude pruning was substantially an artifact of the importance metric, not a fundamental property of fine-tuned children's ASR fragility.** Activation-aware importance (weight × activation norm) recovers most of the "lost" robustness that magnitude's crude weight-only signal missed
-- **Low-sparsity trade-off**: Wanda is slightly WORSE than magnitude at 10-30% (e.g. 30%: magnitude 9.34% vs Wanda 10.28%) - per-output-row thresholding appears less globally-optimal than a whole-layer threshold when a layer's redundancy is already easily captured. Wanda's advantage is concentrated exactly in the high-sparsity region where magnitude fails hardest, not uniform across all sparsity levels
-- **Revises the earlier "cliff position independent of model capacity" finding**: now understood as "cliff position highly dependent on importance metric quality." A better importance signal pushes the safe deployment ceiling well past what magnitude pruning suggested - this is a more nuanced, more mechanistic, and more publishable finding than the original capacity-independence result
+**MAJOR FINDING (revised after 60-90% extension) - Wanda relocates the cliff, does not eliminate it:**
+- Magnitude pruning breaks catastrophically by 45-50% (18.06% → 279.78% WER)
+- Wanda stays usable through 50% (12.01% WER, +2.85% vs FP16), begins visibly degrading at 55% (16.45%, +7.29%), then hits a sharp cliff edge between 55% and 60% (55.58%, a 9x steeper per-step degradation than the 50→55% step), fully catastrophic by 70% (118.84%)
+- This is a **~15-percentage-point sparsity extension** of the safe deployment zone (roughly 40-45% → 55-60%), not cliff elimination
+- **At 45-50%, the gap is still dramatic**: magnitude 18.06-279.78% vs Wanda 10.41-12.01% - a 7.65 to 267.77 percentage-point advantage for Wanda in exactly the region where magnitude fails hardest
+- **The mechanism still holds**: activation-aware importance (weight × activation norm) avoids magnitude pruning's blind spots (large weights on near-zero-activation inputs; small weights on frequently-large-activation inputs), substantially delaying - not eliminating - the point of catastrophic failure
+- **Low-sparsity trade-off unchanged**: Wanda is slightly WORSE than magnitude at 10-30% (e.g. 30%: magnitude 9.34% vs Wanda 10.28%) - per-output-row thresholding appears less globally-optimal than a whole-layer threshold when a layer's redundancy is already easily captured cheaply
+- **Interesting failure-mode transition within Wanda's own cliff**: 70% (118.84%, climbing - consistent with active hallucination) → 80% (99.92%, dropping - consistent with the model collapsing toward near-empty/deletion-heavy output). This mirrors the exact hallucination-to-silence transition seen with Medium-EN magnitude pruning at 45%→50% (200.93% → 99.99%), now observed within a single model's own cliff region rather than only across models of different capacity
+- **Revises the earlier "cliff position independent of model capacity" finding**: better stated as "cliff position highly dependent on importance metric quality, though every metric tested so far eventually has its own cliff." Neither magnitude nor Wanda supports the >50% "lossless" sparsity sometimes claimed in general LLM pruning literature for this fine-tuned children's ASR model
 
 **Methodological note:** Wanda calibration sources from `data/filtered/train` (individual filtered MyST utterances, avg 8.54s) rather than `data/concatenated/train`, which does not exist - `preprocess_myst.py`'s Phase 2 concatenation was only ever run for the test partition (see Dataset Composition section above). Calibration is forward-pass-only (no gradients, no weight updates) and strictly disjoint from the 3,972-chunk test split used for all WER evaluation.
 
-**Remaining Wanda work:** Small-EN 60-90% extension (queued), Medium-EN full sweep (not started), Small-multilingual full sweep (not started) - open question is whether the cliff-elimination finding generalizes across all three variants or is specific to Small-EN.
+**Remaining Wanda work:** Small-EN sweep complete through 80% (90% deliberately not run - model already broken by 70-80%, judged low additional value). Medium-EN full sweep (not started), Small-multilingual full sweep (not started) - open question is whether Wanda's ~15-point cliff extension generalizes across all three variants or is specific to Small-EN.
 
 ---
+
+### Wanda Pruning - Medium-EN (10-50% Complete, Extension to 60-80% In Progress)
+
+**Medium-EN** (`aadel4/kid-whisper-medium-en-myst`, FP16 baseline: 8.94%), same calibration protocol (256 samples from `data/filtered/train`)
+
+| Sparsity | Magnitude (per-layer) | Wanda (weight × activation norm, per-row) | Wanda vs Magnitude |
+|---|---|---|---|
+| 0% (FP16) | 8.94% | 8.94% | — |
+| 10% | **8.90%** | 9.28% | Magnitude better (-0.38 for Wanda) |
+| 20% | **8.92%** | 9.04% | Magnitude better (-0.12 for Wanda) |
+| 30% | **8.88%** | 9.06% | Magnitude better (-0.18 for Wanda) |
+| 40% | 21.25% | **9.57%** | **Wanda MASSIVELY better (+11.68)** |
+| 45% | 200.93% | **9.64%** | **Wanda MASSIVELY better (+191.29)** |
+| 50% | 99.99% | **10.23%** | **Wanda MASSIVELY better (+89.76)** |
+| 55% | N/T | 14.21% | Wanda degrading (+5.27), RTF still normal |
+| 60% | N/T (magnitude not extended) | 109.78% | Wanda's cliff edge (+95.57 per-step, hallucination begins) |
+| 70% | N/T | 139.63% | Wanda broken |
+| 80% | N/T | 124.46% | Wanda broken, RTF below baseline (empty-output signature) |
+
+**MAJOR FINDING - Medium-EN's Wanda curve is flatter than Small-EN's, reversing the capacity story:**
+- Under magnitude pruning, Medium-EN failed *earlier and worse* than Small-EN (cliff starts at 40% vs 40-45% for Small-EN, with dual hallucination/empty-output failure modes) - extra capacity did NOT help with a crude importance metric
+- Under Wanda, Medium-EN at 50% (10.23%, +1.29% vs FP16) is *more stable* than Small-EN's Wanda result at the same sparsity (12.01%, +2.85%) - extra capacity DOES help once paired with a good importance signal
+- **RTF stays normal throughout (≈0.042-0.043)** across all six sparsity levels, confirming no hallucination is occurring - a sharp contrast to magnitude pruning's 45-50% runs, which took 8-9 hours each due to runaway token generation
+- **Revised interpretation**: model capacity does not rescue pruning unconditionally - it only helps when the importance metric can correctly identify genuinely redundant weights. A bad metric (magnitude) may in fact make a larger model *more* fragile, since more "seemingly small" weights turn out to be load-bearing in ways magnitude cannot detect. A good metric (Wanda) unlocks the capacity advantage that magnitude pruning suggested didn't exist
+- **Same low-sparsity trade-off as Small-EN**: Wanda slightly worse than magnitude at 10-30% (e.g. 30%: 8.88% vs 9.06%), consistent with per-output-row thresholding being less globally-optimal when redundancy is already easily captured by a whole-layer threshold
+- **Cliff fully characterized with the 55% point added**: same qualitative shape as Small-EN - gradual onset (50→55%: +3.98pp, comparable to Small-EN's +4.44pp) followed by a sharp edge (55→60%: +95.57pp, roughly 2.4x steeper than Small-EN's +39.13pp edge). RTF at 55% (0.0431) is still completely normal, confirming hallucination specifically begins between 55% and 60%, not before
+- **Revised comparison**: both Small-EN and Medium-EN have their Wanda cliff onset in the same 50-55% window and edge in the same 55-60% window - the cliff LOCATION is consistent across model sizes, but Medium's edge is markedly steeper once it hits, consistent with the broader finding that Medium fails harder even when it fails at a similar sparsity level
+- **RTF pattern across 60-80%** is consistent with a hallucination-to-silence transition: 60% RTF=0.1465 (3.5x baseline, hallucinating), 70% RTF=0.0687 (1.6x baseline), 80% RTF=0.0395 (below baseline, consistent with near-empty output). WER is non-monotonic across this range (109.78% → 139.63% → 124.46%), less clean than the Small-EN 70→80% transition but directionally consistent with the same mechanism
+
+### Wanda Pruning - Small-multilingual (10-50% Complete, Extension In Progress)
+
+**Small-multilingual** (`aadel4/kid-whisper-small-myst`, FP16 baseline: 9.91%), same calibration protocol (256 samples from `data/filtered/train`)
+
+| Sparsity | Magnitude (per-layer) | Wanda (weight × activation norm, per-row) | Wanda vs Magnitude |
+|---|---|---|---|
+| 0% (FP16) | 9.91% | 9.91% | — |
+| 10% | **9.68%** | 9.72% | Magnitude marginally better (~tied) |
+| 20% | **9.86%** | 9.97% | Magnitude marginally better |
+| 30% | 10.35% | **10.16%** | Wanda better - crossover already here |
+| 40% | 17.54% | **11.01%** | **Wanda better (+6.53)** |
+| 45% | 151.51% | **11.65%** | **Wanda MASSIVELY better (+139.86)** |
+| 50% | 359.03% | **14.31%** | **Wanda MASSIVELY better (+344.72)** |
+| 55% | N/T | 33.55% | Wanda degrading (+23.64), RTF already elevated (2.3x baseline) |
+| 60% | N/T | 157.15% | Wanda broken (+147.24) |
+| 70% | N/T | 102.81% | Wanda broken (+92.90), WER drops from 60% but RTF stays flat (0.0526→0.0529) - unlike Small-EN/Medium-EN, no clean RTF-confirmed hallucination-to-silence signature here |
+
+**Two notable patterns for this variant:**
+- **Earliest magnitude/Wanda crossover of all three variants**: Small-EN and Medium-EN both stay magnitude-favored through 30%, crossing over at 40%. Small-multilingual crosses over already at 30%
+- **Largest absolute rescue at 50% of all three variants**: Small-multilingual's magnitude pruning was the worst failure of the three at 50% (359.03%, vs Small-EN's 279.78% and Medium-EN's 99.99%), and Wanda brings it down to just 14.31% - a 344.72-point rescue, the biggest magnitude-to-Wanda improvement observed
+- **But weakest absolute Wanda performance at 50%** among the three variants (14.31% vs Medium-EN's 10.23% and Small-EN's 12.01%) - the rescue is dramatic relative to its own magnitude baseline, but Small-multilingual is not the best-performing variant under Wanda in absolute terms
+- **RTF stays flat (~0.021) across all six points** - no hallucination signal through 50%, same clean pattern as Medium-EN's Wanda curve
+- **Extension to 55-60% complete - cliff arrives EARLIER and STEEPER than either other variant**: onset step (50→55%): +19.24pp, far larger than Small-EN's +4.44pp or Medium-EN's +3.98pp over the same step - no gentle ramp for this variant. Edge step (55→60%): +123.60pp, the steepest of all three (vs Small-EN's +39.13pp and Medium-EN's +95.57pp)
+- **RTF elevation begins one step earlier too**: already 2.3x baseline at 55% (0.0486 vs ~0.021 baseline), whereas Medium-EN's RTF stayed fully normal at 55% and only elevated at 60%. Hallucination onset is compressed into an earlier sparsity window for this variant
+- **Reversal worth noting**: the variant with the largest Wanda rescue in the 40-50% range (359.03%→14.31%, the biggest gap of all three) is also the variant whose own cliff arrives earliest and steepest past 50% - Wanda's benefit is not uniform across variants, and has a shorter runway here than for Small-EN or Medium-EN
+- **70% tested - result does not cleanly match the Small-EN/Medium-EN hallucination-to-silence pattern**: WER drops from 157.15% (60%) to 102.81% (70%), but RTF stays essentially flat (0.0526 → 0.0529) rather than dropping as it did when Small-EN/Medium-EN showed the same WER-decrease pattern. 102.81% sits in the same near-100% territory associated with near-empty output elsewhere in this study, but the flat RTF here does not provide the same corroborating signal - flagged as suggestive of, not confirmed as, the same failure-mode transition. Cliff location and catastrophic-beyond-cliff behavior are both clearly established; sweep treated as complete at 70% given diminishing interpretability of further points
+- **Small-multilingual Wanda sweep now complete (10-70%)** - all three KID-Whisper variants have comparable-depth Wanda characterization, enabling full cross-model synthesis
 
 ### Storage Note (applies to both magnitude and Wanda pruning)
 
@@ -819,7 +883,7 @@ Pruned models are still stored as dense FP16 (0.450 GB for Small, 1.423 GB for M
 | Week 5 | Custom FP4 E2M1+pct + LoRA fine-tuning. Optimal: r=16 q+v 500 steps → 13.77% WER (-0.26% vs zero-shot). Key findings: exposure bias limits training to ~500 steps; use_reentrant=False required for gradient checkpointing; larger LoRA (r=32+fc1) worse due to 4× amplification. Scheduled sampling (embedding mixing) did not help. | ✅ Done |
 | Week 6 | KID-Whisper multilingual Small + Medium PTQ (old protocol). Small-myst best: INT8 naive 11.35% / BnB NF4 11.44% 0.173 GB. Medium-en best: BnB FP4 10.98% (beats FP16!). Key rules: naive > pct for fine-tuned; INT8/FP8 lossless for 769M; grid irrelevant at scale; FP2 no-zero → 713% WER. | ✅ Done |
 | Week 7 | Corrected protocol + K-means codebook. Small-EN best: FP8 naive 8.99% beats paper. Medium-EN best: BnB FP4 8.93% matches paper at 0.438 GB. K-means: Small-EN catastrophic all k; Medium-EN kmeans_k256 9.16% matches FP8 (fixed grids still win at 4-bit). Novel finding: learned codebooks need Gaussian distribution + model capacity + enough centroids. | ✅ Done |
-| Week 8 | Magnitude pruning study (script 21_magnitude_pruning.py, per-layer method, corrected pipeline protocol). Small-EN full curve: 10% 9.01% (regularization), 20% lossless, 30% 9.34%, 40% 11.00% (cliff begins), 45% 18.06%, 50% 279.78% (catastrophic). Medium-EN partial: 10% 8.90%, 20% 8.92%, 30% 8.88% (beats FP16), 40% 21.25% (cliff). Novel finding: capacity does NOT extend pruning cliff (unlike quantization) - both variants fail at similar 40-45% boundary. Pruning removes info permanently while quantization only adds noise. Medium-EN 45%/50% pending. | 🔄 In progress |
+| Week 8 | Magnitude pruning (script 21_magnitude_pruning.py, per-layer, corrected pipeline protocol) COMPLETE across all 3 variants (10-50%, 5% steps): Small-EN cliff at 45-50%, Small-multilingual cliff at 40-45%, Medium-EN cliff at 40% (steepest, dual failure modes - hallucination at 45%, empty output at 50%). Universal ~40% cliff regardless of capacity or language, contradicting quantization Rules 8/11. Wanda pruning (script 22_wanda_pruning.py, activation-aware importance) for Small-EN COMPLETE 10-80% (90% deliberately skipped): relocates the cliff from 40-45% to 55-60%, a ~15-point sparsity extension, not elimination as initially thought before extending past 50%. Medium-EN and Small-multilingual Wanda sweeps not yet started. | ✅ Magnitude done, Wanda partial |
 
 ---
 
@@ -847,6 +911,7 @@ Pruned models are still stored as dense FP16 (0.450 GB for Small, 1.423 GB for M
 | [18] | Nagel, M., et al. (2021). *A White Paper on Neural Network Quantization.* Qualcomm AI Research. arXiv:2106.08295. |
 
 ---
+
 *Last updated: Week 8 (Magnitude pruning study - Small-EN complete, Medium-EN in progress)*
 
 
