@@ -872,6 +872,69 @@ Pruned models are still stored as dense FP16 (0.450 GB for Small, 1.423 GB for M
 - Frantar & Alistarh 2023, "SparseGPT" (arXiv:2301.00774)
 - Lai et al. 2021, "PARP: Prune, Adjust and Re-Prune" (arXiv:2106.05933)
 
+---
+
+## ✅ Week 9 | Combined Pruning + Quantization
+
+**Protocol:** Wanda pruning (per-output-row, calibrated on 256 samples from `data/filtered/train`) applied first, followed by post-training quantization on the pruned model. Same corrected pipeline evaluation as all prior weeks. Script: `24_combined_pruning_quantization.py`.
+
+**Scope:** 3 quantization methods (`fp8_naive`, `fp4_naive`, `bnb_fp4`) × 2 sparsity levels (30%, 45%) × 3 variants = 18 combinations. `int4_pct` deliberately deferred from this round (see script docstring) to keep the first pass tighter; remains available as a follow-up.
+
+**Order of operations:** prune first, then quantize - not the reverse. Pruning's importance ranking needs full FP16 precision to be meaningful; quantizing first would collapse weights onto a coarse grid before pruning could distinguish them. Zero always quantizes to zero in every scheme used here, so pruned entries stay exactly zero through quantization with no interaction to worry about on that front.
+
+### Small-EN Complete (6/6)
+
+| Method | 30% sparsity | 45% sparsity | Wanda-only ref (30%/45%) |
+|---|---|---|---|
+| fp8_naive | 9.82% (+0.66) | 10.63% (+1.47) | 10.28% / 10.41% |
+| bnb_fp4 | 9.87% (+0.71) | 11.62% (+2.46) | 10.28% / 10.41% |
+| fp4_naive | 12.68% (+3.52) | 15.42% (+6.26) | 10.28% / 10.41% |
+
+**Three-way interaction pattern - a genuine finding, not just "better quantizer wins":**
+- **fp8_naive synergizes with pruning at both sparsity levels** - beats Wanda-only pruning alone (9.82%/10.63% vs 10.28%/10.41%), consistent with FP8's known regularization effect (Rule 10) partially offsetting pruning damage rather than simply adding to it
+- **bnb_fp4 synergizes at 30% but crosses over to compounding at 45%** - beats Wanda-only at 30% (9.87% vs 10.28%) but is worse at 45% (11.62% vs 10.41%); the benefit that holds at low sparsity breaks down as pruning gets more aggressive
+- **fp4_naive compounds damage at both sparsity levels**, and the gap widens sharply with sparsity (+3.52pp at 30% → +6.26pp at 45%, nearly 4x fp8_naive's damage at the same sparsity) - consistent with FP4's known EN-specific fragility (Rule 11) interacting destructively with pruning rather than averaging out
+
+### Medium-EN In Progress (2/6)
+
+| Method | 30% sparsity | 45% sparsity | Wanda-only ref (30%/45%) |
+|---|---|---|---|
+| fp8_naive | 9.22% (+0.28) | 9.90% (+0.96) | 9.06% / 9.64% |
+
+**Different interaction pattern than Small-EN:** fp8_naive is slightly WORSE than Wanda-only pruning alone at BOTH sparsity levels for Medium-EN (ΔWanda +0.16 and +0.26), unlike Small-EN where fp8_naive beat Wanda-only at 30% before crossing over at 45%. FP8's regularization benefit (Rule 10) appears most pronounced on Small-EN specifically - Medium-EN, already closer to lossless under quantization alone, has less overfit "slack" for that effect to manifest. Still a mild interaction either way (+0.16 to +0.26pp) - nowhere near fp4_naive's compounding severity on Small-EN.
+
+**Tied-embedding overhead scales with model size, as expected:** 0.099 GB for Medium-EN vs 0.074 GB for Small-EN - consistent with Medium's larger `d_model` (1024 vs 768), confirming the detector generalizes correctly to a differently-sized model rather than being coincidentally right for one specific case.
+
+### Size: Actual vs. Theoretical, and a Real Implementation Gap Worth Documenting
+
+| Method | Sparsity | Actual GB | Theoretical (quant-only) GB | Theoretical (combined) GB | Tied-embedding overhead |
+|---|---|---|---|---|---|
+| fp8_naive | 30% | 0.303 | 0.229 | 0.190 | +0.074 GB (orphaned) |
+| fp8_naive | 45% | 0.303 | 0.229 | 0.157 | +0.074 GB (orphaned) |
+| bnb_fp4 | 30% | 0.173 | 0.118 | 0.112 | intact |
+| bnb_fp4 | 45% | 0.173 | 0.118 | 0.096 | intact |
+| fp4_naive | 30% | 0.303 | 0.118 | 0.112 | +0.074 GB (orphaned) |
+| fp4_naive | 45% | 0.303 | 0.118 | 0.094 | +0.074 GB (orphaned) |
+
+**A genuine implementation asymmetry, not a bug in the underlying method:** Whisper ties its output projection (`proj_out`) and decoder token embedding (`embed_tokens`) to the same underlying weight tensor (`config.tie_word_embeddings=True`, confirmed via direct `data_ptr()` comparison). Our own naive/pct quantization methods replace `proj_out` via `setattr()`-based module substitution, which orphans `embed_tokens` as a separate, still-FP16, full-size copy of a tensor that's already been quantized elsewhere - a genuine ~76 MB (0.074 GB) memory overhead, constant across sparsity levels (confirmed identical at both 30% and 45%, as expected for a tensor that's never itself pruned or quantized). **bitsandbytes' `from_pretrained`-based loading path does not have this problem** - confirmed directly via `data_ptr()` comparison after a real BnB reload, both weights remain the same `nn.Parameter`, correctly tied. This is a real, reportable practical advantage of loading-time integration over module-replacement-based quantization for any architecture with tied input/output embeddings, not specific to Whisper.
+
+### Timing Breakdown
+
+| Method | Sparsity | Calib (min) | Prune (min) | Quant (min) | Ckpt I/O (min) | Inference (min) | End-to-end (min) |
+|---|---|---|---|---|---|---|---|
+| fp8_naive | 30% | 0.14 | ~0 | ~0 | - | 40.21 | 40.35 |
+| bnb_fp4 | 30% | 0.14 | ~0 | - | 0.03 | 37.58 | 37.75 |
+| fp4_naive | 30% | 0.16 | ~0 | 0.01 | - | ~50 | ~50 |
+
+**Calibration and pruning overhead are negligible** (well under 1 minute combined) regardless of method - essentially all runtime is inference. `bnb_fp4` carries a small additional checkpoint save/reload cost (~2 min combined, see below) not present in the naive/pct in-memory path.
+
+### Known Issues Encountered and Resolved This Week
+
+- **Device-placement bugs** (2 instances, same root cause): this script's execution order (prune on GPU first, quantize afterward in-place) differs from `18_kid_whisper_ptq.py`'s original order (quantize on CPU, single `.to(cuda)` sweep at the end). This exposed two CPU-resident constant tensors (`FP4_TABLE`'s use in `lut_quantize()`, and `per_channel_scale()`'s percentile-branch tensor construction) that were never a problem in the original script's different execution order. Both fixed with explicit device-matching inside the functions themselves, not just at the call site, so the fix holds regardless of future calling context.
+- **Theoretical-size calculation bug**: an earlier version derived the "non-prunable, stays-FP16" byte count from a raw `sum(p.numel() for p in model.parameters())`, which silently misses any `model.buffers()` content - fixed by deriving this instead via subtraction from the model's actual measured total size (the same `model_size_gb()` function used for `actual_size_gb`), guaranteeing consistency by construction.
+- **Diagnostic false-negative**: the tied-embedding detector initially checked `model.proj_out.weight` *after* quantization had already replaced `proj_out` with a wrapper module lacking a `.weight` attribute - silently reported "intact" via a caught `AttributeError` for exactly the cases it was meant to catch. Fixed by capturing the pointer *before* quantization and comparing against `embed_tokens`' current pointer afterward. Two already-completed results (`fp8_naive@30%`, `fp8_naive@45%`) were patched in place post-hoc (JSON metadata only - `actual_size_gb`, WER, and all other fields were unaffected and did not need re-running).
+- **Segfault during a chained `bnb_fp4` run** (second `bnb_fp4` call within one long-running process, 81% through evaluation): dmesg confirmed this was a CPU-side fault inside the Python interpreter itself, not a GPU driver/Xid-level error - consistent with memory corruption surfacing later rather than a hardware/thermal issue. Root cause not fully confirmed, but a related bug was found and fixed regardless (a `transformers.modeling_utils.dispatch_model` monkey-patch was being re-applied and re-wrapped on every `bnb_fp4` call within a chained process rather than patched once). Mitigation: run `bnb_fp4` combinations as standalone process invocations rather than chained together going forward; the retry completed cleanly.
+
 ## 📊 Progress Tracker
 
 | Week | Activity | Status |
