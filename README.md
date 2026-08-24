@@ -985,13 +985,19 @@ Pruned models are still stored as dense FP16 (0.450 GB for Small, 1.423 GB for M
 ## Overview
 
 Post-training quantization (PTQ) sweep applied to vanilla (non-fine-tuned)
-OpenAI Whisper checkpoints -- Small.en, Small (multilingual), Medium.en, and
-Medium (multilingual) -- using the corrected evaluation protocol (see below).
-This complements the KID-Whisper fine-tuned model results by isolating the
-effect of domain fine-tuning: same architectures, same PTQ methods, same
-test set, only the training regime differs.
+OpenAI Whisper checkpoints -- Small.en, Small (multilingual), Medium.en,
+Medium (multilingual), Large-v3, and Large-v2 (in progress) -- using the
+corrected evaluation protocol (see below). This complements the
+KID-Whisper fine-tuned model results by isolating the effect of domain
+fine-tuning: same architectures, same PTQ methods, same test set, only the
+training regime differs. Five models are fully swept (68 total experiment
+runs: 54 across the four Small/Medium models, 14 on Large-v3); Large-v2 is
+in progress (4 of 14 methods complete as of this update).
 
-Script: `scripts/20_vanilla_medium_ptq.py`
+Scripts: `scripts/20_vanilla_medium_ptq.py` (Small.en, Small ML, Medium.en,
+Medium ML) and `scripts/21_vanilla_whisper_large_ptq.py` (Large-v3 and
+Large-v2, kept separate since neither Large version has an English-only
+variant and both need a smaller pipeline batch size to fit 8GB VRAM).
 
 ## Evaluation Protocol
 
@@ -1031,33 +1037,47 @@ and Table 4:
 | Small.en | 13.93% |
 | Medium (ML) | 12.90% |
 | Medium.en | 13.23% |
+| Large-v2 | 12.80% |
+| Large-v3 | 12.60% [5] |
+
+Large-v2's reference (12.80%) is in Attia et al. (2024)'s Table 3 directly.
+Large-v3's reference is not, since that table covers Tiny through Large-V2
+only and Large-V3 was released after the paper. The 12.60% figure for
+Large-v3 instead comes from Fan, Zheng, & Alwan (2024) [5], a later
+children's-ASR benchmarking paper that does report Large-v3 zero-shot
+performance on MyST.
 
 ## Reproduction of Paper Baselines (this work)
 
 FP16 baseline WER obtained under the corrected protocol, full 3,972-chunk
-test set, compared against the paper's zero-shot numbers [2]:
+test set, compared against the paper's zero-shot numbers:
 
-| Model | Our FP16 WER | Paper WER [2] | Gap |
+| Model | Our FP16 WER | Paper WER | Gap |
 |---|---|---|---|
-| Small.en | 14.51% | 13.93% | +0.58 pp |
-| Small (ML) | 14.82% | 14.06% | +0.76 pp |
-| Medium.en | 13.45% | 13.23% | +0.22 pp |
-| Medium (ML) | 13.79% | 12.90% | +0.89 pp |
+| Small.en | 14.51% | 13.93% [2] | +0.58 pp |
+| Small (ML) | 14.82% | 14.06% [2] | +0.76 pp |
+| Medium.en | 13.45% | 13.23% [2] | +0.22 pp |
+| Medium (ML) | 13.79% | 12.90% [2] | +0.89 pp |
+| Large-v3 | 13.17% | 12.60% [5] | +0.57 pp |
+| Large-v2 | 13.26% | 12.80% [2] | +0.46 pp |
 
-All four reproductions land within 1 percentage point of the published
-zero-shot numbers, confirming the corrected evaluation protocol is sound.
-Multilingual variants consistently show a larger gap to the paper than
-their English-only counterparts, and the gap widens rather than narrows
-going from Small to Medium.
+All six reproductions land within 1 percentage point of the published
+zero-shot numbers, confirming the corrected evaluation protocol is sound
+across model families and both reference papers used. Multilingual variants
+consistently show a larger gap to the paper than their English-only
+counterparts among the Small/Medium models; Large-v3 (necessarily
+multilingual, no English-only variant exists) falls in the middle of the
+observed gap range.
 
 ## Quantization Methods Tested
 
 Naive (absmax) and percentile-clipped (99.9th percentile) variants at INT8,
 INT4, FP8 (E4M3), and FP4 (E2M1); production `bitsandbytes` INT8/NF4/FP4 [3];
 and true 4-bit nibble-packed FP4/INT4 (0.5 bytes/weight, verified
-bit-identical in accuracy to the lookup-table equivalents, see Finding 3).
+bit-identical in accuracy to the lookup-table equivalents on every model
+tested, see Finding 3).
 
-## Results: Whisper Small.en (complete sweep, 14 methods)
+## Results: Whisper Small.en (14 methods)
 
 | Method | WER | Delta vs FP16 | Size (GB) | Status |
 |---|---|---|---|---|
@@ -1076,7 +1096,7 @@ bit-identical in accuracy to the lookup-table equivalents, see Finding 3).
 | FP4 percentile99.9 | 71.15% | +56.64 pp | 0.303 | collapsed |
 | INT4 percentile99.9 | 115.72% | +101.21 pp | 0.303 | total breakdown |
 
-## Results: Whisper Small (Multilingual) (complete sweep, 12 methods)
+## Results: Whisper Small (Multilingual) (12 methods)
 
 | Method | WER | Delta vs FP16 | Size (GB) | Status |
 |---|---|---|---|---|
@@ -1093,7 +1113,7 @@ bit-identical in accuracy to the lookup-table equivalents, see Finding 3).
 | FP4 percentile99.9 | 107.76% | +92.94 pp | 0.303 | total breakdown |
 | INT4 percentile99.9 | 189.11% | +174.29 pp | 0.303 | total breakdown |
 
-## Results: Whisper Medium.en (complete sweep, 14 methods, all clean)
+## Results: Whisper Medium.en (14 methods, all clean)
 
 The only model in the entire study that stays clean at every configuration
 tested.
@@ -1115,38 +1135,210 @@ tested.
 | INT4 percentile99.9 | 15.90% | +2.45 pp | 0.817 | clean |
 | FP4 percentile99.9 | 18.45% | +5.00 pp | 0.817 | clean |
 
-## Results: Whisper Medium (Multilingual) (12 of 14 methods complete)
+## Results: Whisper Medium (Multilingual) (14 methods)
+
+| Method | WER | Delta vs FP16 | Size (GB) | Status |
+|---|---|---|---|---|
+| BnB FP4 [3] | 13.27% | -0.52 pp | 0.438 | clean, beats FP16 |
+| INT8 naive | 13.45% | -0.34 pp | 0.817 | clean, beats FP16 |
+| BnB NF4 [3] | 13.53% | -0.26 pp | 0.438 | clean, beats FP16 |
+| BnB INT8 [3][4] | 13.63% | -0.16 pp | 0.766 | clean, beats FP16 |
+| FP16 baseline | 13.79% | -- | 1.423 | -- |
+| FP8 naive | 14.17% | +0.38 pp | 0.817 | clean |
+| FP4 naive | 16.85% | +3.06 pp | 0.817 | degraded |
+| FP4 packed (nibble) | 16.85% | +3.06 pp | 0.464 | degraded |
+| INT4 naive | 29.33% | +15.54 pp | 0.817 | collapsed |
+| INT4 packed (nibble) | 29.33% | +15.54 pp | 0.464 | collapsed |
+| INT4 percentile99.9 | 97.12% | +83.33 pp | 0.817 | total breakdown |
+| INT8 percentile99.9 | 104.76% | +90.97 pp | 0.817 | total breakdown |
+| FP4 percentile99.9 | 106.73% | +92.94 pp | 0.817 | total breakdown |
+| FP8 percentile99.9 | 108.72% | +94.93 pp | 0.817 | total breakdown |
+
+Manual inspection of the INT8-percentile prediction file confirmed 93.5% of
+the 3,972 test chunks showed mismatches, with prediction lengths running to
+4,310 characters -- the same repetition-loop generation pathology documented
+on the Small models, not a distinct failure mode.
+
+## Results: Whisper Large-v3 (14 methods)
+
+No English-only variant of Large-v3 exists (OpenAI never released a
+`large-v3.en` checkpoint), so this is evaluated as a single multilingual
+model rather than an EN/ML pair, and cannot directly extend the Finding 1
+capacity-times-language table above. It remains a valuable data point for
+the overall size-scaling picture (244M -> 769M -> 1,550M) and, as detailed
+in Finding 6 below, surfaces a distinct and unexpected quantization
+behavior of its own.
+
+| Method | WER | Delta vs FP16 | Size (GB) | Status |
+|---|---|---|---|---|
+| FP4 percentile99.9 | 12.54% | -0.63 pp | 1.571 | clean, best result |
+| BnB NF4 [3] | 12.65% | -0.52 pp | 0.824 | clean |
+| INT8 percentile99.9 | 12.78% | -0.39 pp | 1.571 | clean |
+| FP8 percentile99.9 | 12.79% | -0.38 pp | 1.571 | clean |
+| FP8 naive | 12.90% | -0.27 pp | 1.571 | clean |
+| BnB FP4 [3] | 13.06% | -0.11 pp | 0.824 | clean |
+| FP16 baseline | 13.17% | -- | 2.875 | -- |
+| INT8 naive | 13.20% | +0.03 pp | 1.571 | clean |
+| BnB INT8 [3][4] | 13.20% | +0.03 pp | 1.508 | clean |
+| FP4 naive | 14.25% | +1.08 pp | 1.571 | clean |
+| FP4 packed (nibble) | 14.25% | +1.08 pp | 0.857 | clean |
+| INT4 percentile99.9 | 18.87% | +5.70 pp | 1.571 | clean |
+| INT4 naive | 657.04% | +643.87 pp | 1.571 | catastrophic |
+| INT4 packed (nibble) | 657.04% | +643.87 pp | 0.857 | catastrophic |
+
+Twelve of the fourteen methods stayed clean, and six of those beat the
+FP16 baseline outright. The only failures are INT4 naive and its packed
+equivalent, both collapsing to an identical 657.04% WER -- the single worst
+result across the entire five-model study. Manual inspection of the INT4
+naive prediction file confirmed 3,934 of 3,972 chunks (99.05%) showed
+mismatches, with prediction lengths running to 7,490 characters, the most
+severe repetition-loop signature observed in the study; the `int4_packed`
+run took 24 hours 41 minutes to complete (versus roughly 2.2-2.9 hours for
+clean runs), the longest single run recorded.
+
+### Verification that the INT4-naive failure on Large-v3 is a genuine
+### quantization result and not a script bug
+
+Because 657.04% is by far the most extreme number in the study, it is
+reported here alongside the specific checks performed to rule out an
+implementation error before treating it as a finding rather than a defect:
+
+1. **The same code path is used for every model and every naive-quantization
+   run.** `quantize_model()`, `per_channel_scale()`, and `lut_quantize()`
+   take only `(model, method)` and contain no `args.model_id` or other
+   model-conditional branching (verified directly by grepping the script for
+   every `args.model_id` reference and confirming none fall inside the
+   quantization functions -- see Evaluation Protocol above). The INT4-naive
+   code path that produces 14.10% (clean) on Medium.en and 29.33% on Medium
+   (ML) is line-for-line the same code path that produces 657.04% on
+   Large-v3. Nothing in the quantization logic is Large-v3-specific.
+
+2. **Two independent implementations of INT4 naive quantization agree
+   exactly.** `int4_naive` (lookup-table-based storage, 1.571GB) and
+   `int4_packed` (true nibble-packed storage, 0.857GB) are separate code
+   paths -- one dequantizes via a lookup table, the other via bitwise nibble
+   unpacking (`pack_nibbles`/`unpack_nibbles`) -- yet both produced
+   identical WER to two decimal places (657.04% each) and, on manual
+   inspection, the same prediction lengths and mismatch pattern. Two
+   differently-implemented quantization paths reproducing an identical,
+   highly unusual result independently is strong evidence the result
+   reflects the underlying model weights and INT4 grid, not a bug specific
+   to either implementation.
+
+3. **The failure mode is qualitatively identical to failures already
+   established as genuine on other models.** The prediction file shows the
+   same repetition-loop pathology (a single phrase repeated dozens of times
+   until `max_new_tokens` is reached) documented and manually verified on
+   Small.en, Small (ML), and Medium (ML) at their respective collapse
+   points. It is not a crash, an empty output, garbled tokens, or any other
+   signature that would suggest a numerical error (such as an overflow) is
+   unique to Large-v3's architecture; it is the same generation-level
+   failure mode observed at smaller scales under different quantization
+   settings, just triggered here by a different configuration (naive INT4
+   rather than percentile clipping).
+
+4. **The run's wall-clock time is independently consistent with genuine
+   model-level collapse, not a stalled or hung process.** The run completed
+   normally (3,972 of 3,972 chunks processed, `calculate_wer.py` cross-check
+   matched the inline WER) in 24 hours 41 minutes, an order of magnitude
+   longer than any clean run (2.2-4.9 hours) but proportionate to the
+   degree of repetition observed in the predictions (chunks looping toward
+   `max_new_tokens` cost roughly proportionally more generation steps).
+   This is the expected signature of a model generating very long,
+   repetitive output, not of the run failing to progress.
+
+5. **The result sits at the extreme end of an otherwise smooth, explicable
+   trend, rather than appearing in isolation.** As detailed in Finding 6,
+   INT4 naive's failure is the most severe point on a consistent
+   naive-versus-percentile reversal that holds across every bit-width and
+   grid type tested on this model (8-bit INT, 8-bit FP, and 4-bit FP all
+   show the same directional reversal, just at far smaller magnitude). A
+   script bug specific to one method-model combination would not be
+   expected to sit on such a consistent trend line.
+
+Taken together, these checks support treating 657.04% as a genuine, if
+extreme, quantization outcome specific to combining Large-v3's scale with
+naive INT4 absmax quantization, rather than as a defect in the evaluation
+pipeline.
+
+**Why this happens.** Naive absmax quantization sets its per-channel scale
+from the single most extreme weight value in that channel, then divides the
+INT4 grid's 15 available levels across the full range implied by that
+extreme value. Prior work on outlier-aware quantization (Dettmers et al.,
+2022, LLM.int8() [4]) established that transformer language models develop
+a small number of disproportionately large-magnitude "outlier" weights, and
+that these outliers grow more prominent as model scale increases -- this is
+the entire motivation for `bitsandbytes`' explicit outlier-isolation design
+in its own INT8 implementation. At 1,550M parameters, Large-v3 is
+substantially larger than any other model in this study, and if even one
+weight in a channel is a severe outlier, naive absmax stretches that
+channel's entire quantization step size to accommodate it. With only 15
+levels available at INT4, this leaves almost no resolution for the
+remaining, typical-magnitude weights in that channel -- they collapse
+toward one or two of the 15 levels near zero, destroying most of the
+useful signal those weights carried. Percentile clipping at the 99.9th
+percentile avoids this by deliberately excluding the most extreme 0.1% of
+values when computing the scale, so the remaining weights retain full
+15-level resolution at the cost of clipping (and thus corrupting) only the
+rare outliers themselves -- which is consistent with why INT4-percentile
+stays clean (18.87%) on the same model where INT4-naive collapses. INT8's
+127-level grid is far more forgiving of the same outlier-driven scale
+distortion simply because it has many more levels to spread the same
+distorted range across, which is why the naive/percentile gap is small at
+8-bit (0.1-0.4 pp) but explosive at 4-bit (638 pp). This mechanism is
+discussed further, including its relationship to the different (and in one
+respect opposite) outlier-related failure mode found on Medium (ML), in
+Finding 6 below. It remains a well-motivated hypothesis grounded in
+established quantization literature rather than a mechanism directly
+confirmed for this specific model, since it has not been verified by
+inspecting Large-v3's actual weight-distribution statistics (for example,
+per-channel outlier magnitude or kurtosis).
+
+## Results: Whisper Large-v2 (in progress, 4 of 14 methods)
+
+Evaluated as a follow-up to Large-v3 specifically to test whether Finding
+6's naive-versus-percentile reversal is a property of the ~1,550M-parameter
+scale in general, or specific to the Large-v3 checkpoint. Large-v2 is the
+same architecture and parameter count as Large-v3, differing mainly in
+training data and recipe refinements between the two OpenAI releases.
 
 | Method | WER | Delta vs FP16 | Status |
 |---|---|---|---|
-| BnB FP4 [3] | 13.27% | -0.52 pp | clean, beats FP16 |
-| INT8 naive | 13.45% | -0.34 pp | clean, beats FP16 |
-| BnB NF4 [3] | 13.53% | -0.26 pp | clean, beats FP16 |
-| BnB INT8 [3][4] | 13.63% | -0.16 pp | clean, beats FP16 |
-| FP16 baseline | 13.79% | -- | -- |
-| FP8 naive | 14.17% | +0.38 pp | clean |
-| FP4 naive | 16.85% | +3.06 pp | degraded |
-| INT4 naive | 29.33% | +15.54 pp | collapsed |
-| INT4 percentile99.9 | 97.12% | +83.33 pp | total breakdown |
-| INT8 percentile99.9 | 104.76% | +90.97 pp | total breakdown |
-| FP4 percentile99.9 | 106.73% | +92.94 pp | total breakdown |
-| FP8 percentile99.9 | 108.72% | +94.93 pp | total breakdown |
+| FP16 baseline | 13.26% | -- | -- |
+| INT8 naive | 13.31% | +0.05 pp | clean |
+| FP8 naive | 13.80% | +0.54 pp | clean |
+| FP8 percentile99.9 | 14.26% | +1.00 pp | clean |
+| INT8 percentile99.9 | 14.46% | +1.20 pp | clean |
 
-Remaining for Medium (ML): FP4 packed, INT4 packed.
+At both bit-widths tested so far, naive quantization clearly outperforms
+percentile clipping on Large-v2 (INT8: 13.31% vs 14.46%; FP8: 13.80% vs
+14.26%) -- the "normal" pattern seen on every model in this study except
+Large-v3, where the ordering was reversed (see Finding 6). Since Large-v2
+and Large-v3 share the same architecture and parameter count, this result
+indicates that Finding 6's reversal is **not** a general property of
+reaching approximately 1.5 billion parameters, as the original hypothesis
+proposed. It appears instead to be specific to some property of the
+Large-v3 checkpoint's particular training data or recipe, distinguishing it
+even from the immediately preceding model in the same release family. This
+significantly narrows Finding 6's scope and is treated as a required
+correction to that finding's framing (see the revised discussion in Finding
+6 below).
 
-All four percentile99.9-clipped bit-widths were tested on Medium (ML), and
-all four collapsed to total breakdown, confirmed by manual inspection of
-prediction files (93.5% of chunks mismatched on INT8 percentile, matching
-the repetition-loop pattern documented on the Small models -- see Finding 1).
+INT4 naive and INT4 percentile99.9 are deliberately run last for Large-v2,
+after every other method, since INT4 naive took approximately 19 hours to
+complete on Large-v3 due to its catastrophic collapse (see the Verification
+section above); running the faster methods first avoids that runtime risk
+blocking progress on the rest of the sweep. Remaining methods: FP4 naive,
+FP4 percentile99.9, BnB INT8, BnB NF4, BnB FP4, FP4 packed, INT4 naive,
+INT4 percentile99.9, INT4 packed.
 
 ## Key Findings
 
-### Finding 1 (headline result, revised after Medium-ML data): quantization
-### stability at the 769M-parameter scale is not a function of capacity
-### alone -- it is the interaction of sufficient capacity AND English-only
-### training
+### Finding 1 (headline result): quantization stability at the
+### 769M-parameter scale is not a function of capacity alone -- it is the
+### interaction of sufficient capacity AND English-only training
 
-An initial hypothesis, based on the three models evaluated first (both
+An initial hypothesis, based on the first three models evaluated (both
 Small variants and Medium.en), was that a simple capacity threshold around
 769M parameters explained why percentile-clipped quantization collapsed
 into repetition-loop hallucination on Small models but stayed clean on
@@ -1165,20 +1357,19 @@ lossless.
 | Medium (ML) | 769M | ML | 104.76% | 108.72% | 106.73% | 97.12% | 29.33% |
 
 Medium.en is the only configuration in the entire study that remains clean
-across every method tested, including the most aggressive combined setting
-(4-bit plus percentile clipping). Medium (ML), despite identical parameter
-count, collapses to total breakdown (WER exceeding 100%) at all four
-percentile-clipped bit-widths tested, and shows real degradation even under
-naive INT4 (29.33% WER, +15.54 pp) where Medium.en costs only +0.65 pp.
-Collapsed runs on Medium (ML) also took markedly longer to evaluate
+across all 14 methods tested, including the most aggressive combined
+setting (4-bit plus percentile clipping). Medium (ML), despite identical
+parameter count, collapses to total breakdown (WER exceeding 100%) at all
+four percentile-clipped bit-widths tested, and shows real degradation even
+under naive INT4 (29.33% WER, +15.54 pp) where Medium.en costs only +0.65
+pp. Collapsed runs on Medium (ML) also took markedly longer to evaluate
 (5.5-7 hours versus approximately 110 minutes for Medium.en's clean runs at
 the same settings), and manual inspection of the INT8-percentile prediction
-file confirmed 93.5% of the 3,972 test chunks showed mismatches with
-prediction lengths running to 4,310 characters -- the same repetition-loop
-generation pathology documented on the Small models (92.9-96.6% mismatch
-rates there), not a distinct failure mode.
+file confirmed 93.5% of chunks showed mismatches with prediction lengths
+running to 4,310 characters -- matching the repetition-loop pathology
+documented on the Small models (92.9-96.6% mismatch rates there).
 
-The revised conclusion: model capacity alone does not predict quantization
+The conclusion: model capacity alone does not predict quantization
 robustness. Robustness instead depends on the interaction between capacity
 and training specialization -- English-only training at sufficient scale
 (769M) provides a stability margin that neither a smaller English-only
@@ -1192,21 +1383,22 @@ enormous (Medium.en 15.65% vs Medium (ML) 104.76% at INT8-percentile, an
 89.11 percentage-point difference). This is the central thesis contribution
 of the vanilla-model PTQ study.
 
-A plausible (not yet directly confirmed) mechanism: multilingual models
-must route decoding across roughly 99 languages through a shared
-vocabulary and embedding space, and prior work on outlier-aware
-quantization (Dettmers et al., 2022, LLM.int8() [4]) has shown that a small
-number of large-magnitude weights carry disproportionate importance in
-transformer language models, motivating the explicit outlier-isolation
-scheme in `bitsandbytes`' INT8 implementation. Percentile clipping at 99.9%
-specifically removes exactly these extreme-magnitude weights. If
-multilingual training concentrates more of its critical signal into such
-outlier weights than English-only training does, that would explain why
-percentile clipping is catastrophic for both multilingual models regardless
-of size, while English-only models degrade more gracefully. Confirming this
-mechanism directly would require weight-distribution analysis (for example,
-comparing kurtosis or outlier concentration between Medium.en and Medium
-(ML) weight tensors) beyond what this PTQ sweep alone demonstrates.
+A plausible (not directly confirmed) mechanism: multilingual models must
+route decoding across roughly 99 languages through a shared vocabulary and
+embedding space, and prior work on outlier-aware quantization (Dettmers et
+al., 2022, LLM.int8() [4]) has shown that a small number of large-magnitude
+weights carry disproportionate importance in transformer language models,
+motivating the explicit outlier-isolation scheme in `bitsandbytes`' INT8
+implementation. Percentile clipping at 99.9% specifically removes exactly
+these extreme-magnitude weights. If multilingual training concentrates more
+of its critical signal into such outlier weights than English-only training
+does, that would explain why percentile clipping is catastrophic for both
+multilingual models regardless of size, while English-only models degrade
+more gracefully. Confirming this mechanism directly would require
+weight-distribution analysis (for example, comparing kurtosis or outlier
+concentration between Medium.en and Medium (ML) weight tensors) beyond what
+this PTQ sweep alone demonstrates, and is noted here as a direction for
+further investigation rather than an established result.
 
 ### Finding 2: grid shape (integer vs float) provides partial protection
 ### against collapse at naive 4-bit quantization on fragile models,
@@ -1230,35 +1422,36 @@ intermediate on Small ML and Medium ML), regardless of whether that
 fragility comes from small scale or from multilingual training -- FP4's
 grid shape is a general-purpose mitigation, not one specific to a
 particular cause of instability. Under combined 4-bit-plus-clipping stress,
-this protection is inconsistent: FP4-percentile is less severe than
-INT4-percentile on both Small models (71.15% vs 115.72% on Small.en;
-107.76% vs 189.11% on Small ML), but on Medium (ML) the two are nearly
-identical (106.73% vs 97.12%, INT4-percentile actually slightly better),
-and on Medium.en the pattern reverses outright -- FP4-percentile (18.45%,
-the single worst Medium.en result) is worse than INT4-percentile (15.90%).
-The mechanism behind this reversal on the one uniquely stable model is not
-yet established.
+this protection is inconsistent across models: FP4-percentile is clearly
+less severe than INT4-percentile on both Small models (71.15% vs 115.72% on
+Small.en; 107.76% vs 189.11% on Small ML); the two are nearly tied on
+Medium (ML), with INT4-percentile actually slightly better (106.73% vs
+97.12%); and on Medium.en the pattern reverses outright, with
+FP4-percentile (18.45%, the single anomalous result in an otherwise
+uniformly clean model) worse than INT4-percentile (15.90%). The mechanism
+behind this reversal on the one uniquely stable model is not established
+and would benefit from further investigation.
 
 ### Finding 3: true bit-packing preserves WER exactly relative to
-### lookup-table quantization at every model scale tested
+### lookup-table quantization on every model tested
 
 `fp4_packed` (true nibble packing, 0.5 bytes/weight) produced WER identical
-to `fp4_naive` (lookup-table based) at both model scales tested: 19.28% on
-Small.en (0.192GB packed vs 0.303GB LUT) and 13.48% on Medium.en (0.464GB
-packed vs 0.817GB LUT). Likewise, `int4_packed` matched `int4_naive` exactly
-at 56.65% on Small.en and 14.10% on Medium.en, including reproducing the
-collapse behavior where present. This confirms the nibble-packing
-implementation (`pack_nibbles`/`unpack_nibbles`) is numerically correct at
-every scale tested -- it changes only the storage representation, not the
-dequantized values used in the forward pass -- and demonstrates that any
-gap between naive/packed quantization and `bitsandbytes`' equivalents (see
-Finding 4) is entirely attributable to `bitsandbytes`' calibration and
-per-block scaling strategy, not to the bit budget or packing format itself.
-Medium (ML) packed-method results are pending and expected to follow the
-same identical-to-naive pattern.
+to `fp4_naive` (lookup-table based) on all three models where both were
+tested: 19.28% on Small.en (0.192GB packed vs 0.303GB LUT), 13.48% on
+Medium.en (0.464GB packed vs 0.817GB LUT), and 16.85% on Medium (ML)
+(0.464GB packed vs 0.817GB LUT). Likewise, `int4_packed` matched
+`int4_naive` exactly at 56.65% on Small.en, 14.10% on Medium.en, and 29.33%
+on Medium (ML), including reproducing collapse behavior where present. This
+confirms the nibble-packing implementation (`pack_nibbles`/`unpack_nibbles`)
+is numerically correct at every scale and training regime tested -- it
+changes only the storage representation, not the dequantized values used in
+the forward pass -- and demonstrates that the entire gap between
+naive/packed quantization and `bitsandbytes`' equivalents (see Finding 4)
+is attributable to `bitsandbytes`' calibration and per-block scaling
+strategy, not to the bit budget or packing format itself.
 
-### Finding 4 (revised, stated as a genuine negative result): BnB FP4 vs
-### NF4 preference does not follow a predictable pattern by model size or
+### Finding 4 (stated as a genuine negative result): BnB FP4 vs NF4
+### preference does not follow a predictable pattern by model size or
 ### language coverage
 
 `bitsandbytes` FP4 [3] and NF4 [3] were compared across all four vanilla
@@ -1270,27 +1463,35 @@ models:
 | Small (ML) | 16.34% | 14.53% | NF4 |
 | Medium.en | 13.91% | 13.53% | NF4 |
 | Medium (ML) | 13.27% | 13.53% | FP4 |
+| Large-v3 | 13.06% | 12.65% | NF4 |
 
 No consistent pattern emerges by language (English-only models split FP4
-and NF4 as winners) or by model size (multilingual models likewise split).
-An earlier hypothesis, based on the first three models evaluated, proposed
-that FP4's advantage on Small.en reflected a Small-architecture-specific
-effect (since vanilla Medium.en, also English-only, favored NF4 like the
-multilingual Small model). The Medium (ML) result contradicts this too:
-Medium (ML) favors FP4, breaking any clean size-based or language-based
-rule. The honest conclusion is that FP4-versus-NF4 preference on vanilla
-Whisper models depends on some other property of each specific checkpoint's
-weight distribution not captured by model size or language coverage alone,
-and this is reported as a genuine inconclusive finding rather than forced
-into a narrative. Regardless of which grid wins on a given model, both
+and NF4 as winners) or by model size (multilingual models split three ways:
+NF4, FP4, then NF4 again as size increases from Small ML through Medium ML
+to Large-v3). An earlier hypothesis, based on the first three models
+evaluated, proposed that FP4's advantage on Small.en reflected a
+Small-architecture-specific effect, since vanilla Medium.en (also
+English-only) favored NF4 like the multilingual Small model. The Medium
+(ML) result contradicted this, favoring FP4 instead. Large-v3, the fifth
+and largest model, favors NF4 again, but this does not resolve the pattern
+either: Large-v3 is multilingual like Small (ML) and Medium (ML), one of
+which favored NF4 and the other FP4, so scale alone does not explain
+Large-v3's result any more than language coverage does. The honest
+conclusion, now with all five models evaluated, is that FP4-versus-NF4
+preference on vanilla Whisper models depends on some other property of
+each specific checkpoint's weight distribution not captured by model size
+or language coverage alone. This is reported as a genuine inconclusive
+finding rather than forced into a narrative that the complete data does
+not support. Regardless of which grid wins on a given model, both
 `bitsandbytes` 4-bit variants substantially outperform the custom
 naive/packed FP4 implementation at every model scale (see Finding 3),
 confirming `bitsandbytes`' double-quantization and per-block calibration
 [3] materially improve on naive absmax-based 4-bit quantization independent
 of which grid is used.
 
-### Finding 5: several quantization methods beat the FP16 baseline outright
-### on specific models, most consistently on Medium (Multilingual)
+### Finding 5: several quantization methods beat the FP16 baseline
+### outright on specific models, most consistently on Medium
+### (Multilingual)
 
 `bitsandbytes` INT8 beat FP16 on Small.en (14.45% vs 14.51%) but not on
 Small (ML) (15.38% vs 14.82%) or Medium.en (13.70% vs 13.45%). On Medium
@@ -1303,7 +1504,92 @@ pp, see Reproduction of Paper Baselines), this may indicate the FP16
 baseline evaluation itself has more headroom on this particular
 model/language combination, rather than these quantization methods
 providing a genuine accuracy improvement over the true underlying model
-quality.
+quality. This is noted as a plausible explanation rather than a settled
+conclusion.
+
+### Finding 6 (revised after Large-v2 data): the Large-v3 naive/percentile
+### reversal is specific to that checkpoint, not a general property of
+### ~1,550M-parameter Whisper models
+
+On every model evaluated up to and including Medium (both variants), naive
+(unclipped absmax) quantization was consistently safer than percentile
+clipping at matched bit-width: naive stayed clean while percentile-clipped
+configurations ranged from mildly costly (Medium.en) to catastrophic
+(Small.en, Small (ML), Medium (ML)). Large-v3 inverts this pattern
+completely and symmetrically across every bit-width and grid type tested:
+
+| Bit-width | Grid | Naive WER | Percentile WER | Percentile advantage |
+|---|---|---|---|---|
+| 8-bit | INT | 13.20% | 12.78% | 0.42 pp |
+| 8-bit | FP | 12.90% | 12.79% | 0.11 pp |
+| 4-bit | FP | 14.25% | 12.54% | 1.71 pp |
+| 4-bit | INT | 657.04% | 18.87% | 638.17 pp |
+
+Percentile clipping wins at every single combination on Large-v3, with the
+margin growing sharply as precision drops: a modest 0.1-0.4 percentage-point
+advantage at 8-bit, growing to a 1.7 percentage-point advantage for FP4, and
+an extreme 638 percentage-point advantage for INT4, where naive
+quantization collapses catastrophically (657.04% WER) while percentile
+clipping stays clean (18.87%). Because the reversal holds for both integer
+and floating-point grids, it cannot be explained as a grid-type artifact.
+
+**This does not, however, hold on Large-v2**, the immediately preceding
+release in the same model family, sharing the identical 1,550M-parameter
+architecture:
+
+| Model | Grid | Naive WER | Percentile WER | Winner |
+|---|---|---|---|---|
+| Large-v3 | INT8 | 13.20% | 12.78% | percentile |
+| Large-v2 | INT8 | 13.31% | 14.46% | naive |
+| Large-v3 | FP8 | 12.90% | 12.79% | percentile |
+| Large-v2 | FP8 | 13.80% | 14.26% | naive |
+
+On Large-v2, naive clearly and consistently beats percentile clipping at
+both bit-widths tested so far -- the same "normal" ordering seen on every
+other model in the study. Since Large-v2 and Large-v3 are architecturally
+identical, differing mainly in training data and recipe refinements between
+the two OpenAI releases, this rules out model scale as the explanation for
+the reversal. The original framing of this finding, which attributed the
+reversal to reaching approximately 1.5 billion parameters, is therefore
+revised: **the naive/percentile reversal is a property of the specific
+Large-v3 checkpoint** (or of whatever distinguishes its training from
+Large-v2's), not a general consequence of scale. This is reported as an
+important correction rather than folded silently into the original framing,
+since it substantially narrows what can be claimed from the Large-v3 result
+and illustrates why single-checkpoint findings benefit from a same-scale
+comparison before being generalized.
+
+Grid shape still determines the severity of naive quantization's danger on
+Large-v3 specifically, consistent with Finding 2's established pattern,
+just operating at a different absolute danger level: INT4's uniform grid
+turns the instability into total collapse, while FP4's non-uniform,
+wider-range grid only turns it into a moderate 1.08 percentage-point cost.
+
+A plausible mechanism (detailed above, in the verification section
+immediately following the Large-v3 results table) extends the same
+outlier-weight literature cited in Finding 1: naive absmax quantization's
+scale is set by each channel's single most extreme weight, and prior work
+on outlier-aware quantization (Dettmers et al., 2022, LLM.int8() [4]) shows
+outlier weight magnitude can grow with model scale in transformer language
+models generally. Given that Large-v2 at the identical scale does not show
+the same instability, this mechanism -- if correct -- would need to explain
+why Large-v3's training specifically produced more severe outliers than
+Large-v2's, rather than treating outlier severity as a simple function of
+parameter count. This remains an open question for further investigation
+(for example, direct comparison of per-channel outlier magnitude or
+kurtosis between the two checkpoints), and the mechanism is reported here
+as a hypothesis consistent with the observed pattern rather than a
+confirmed explanation.
+
+This complicates rather than contradicts the mechanism proposed for Finding
+1: Medium (ML)'s failure mode is percentile clipping *removing* outlier
+signal that a multilingual model's cross-lingual routing apparently
+depends on, while Large-v3's failure mode is naive quantization being
+*warped* by outlier magnitude specific to that checkpoint. These appear to
+be two distinct, checkpoint-and-scale-dependent outlier-related failure
+modes rather than a single universal rule, and distinguishing them with
+confidence would require direct weight-distribution analysis beyond what
+this PTQ sweep alone demonstrates.
 
 ## References
 
@@ -1322,3 +1608,7 @@ quality.
 [4] Dettmers, T., Lewis, M., Belkada, Y., & Zettlemoyer, L. (2022).
     LLM.int8(): 8-bit Matrix Multiplication for Transformers at Scale.
     Advances in Neural Information Processing Systems 35 (NeurIPS 2022).
+
+[5] Fan, R., Zheng, R., & Alwan, A. (2024). Benchmarking Children's ASR
+    with Supervised and Self-supervised Speech Foundation Models.
+    Interspeech 2024. arXiv:2406.10507. (Large-v3 zero-shot MyST baseline.)
