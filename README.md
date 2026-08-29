@@ -878,7 +878,7 @@ Pruned models are still stored as dense FP16 (0.450 GB for Small, 1.423 GB for M
 
 **Protocol:** Wanda pruning (per-output-row, calibrated on 256 samples from `data/filtered/train`) applied first, followed by post-training quantization on the pruned model. Same corrected pipeline evaluation as all prior weeks. Script: `24_combined_pruning_quantization.py`.
 
-**Scope:** 3 quantization methods (`fp8_naive`, `fp4_naive`, `bnb_fp4`) × 2 sparsity levels (30%, 45%) × 3 variants = 18 combinations. `int4_pct` deliberately deferred from this round (see script docstring) to keep the first pass tighter; remains available as a follow-up.
+**Scope:** 3 quantization methods (`fp8_naive`, `fp4_naive`, `bnb_fp4`) × 5 sparsity levels (10%, 20%, 30%, 40%, 45%) × 3 variants = 45 combinations, all complete. Originally run at 2 sparsity levels (30%/45%, 18 combinations) then extended to the full 5-point curve once the 2-point data suggested shapes worth resolving in more detail. `int4_pct` deliberately deferred from this round (see script docstring) to keep scope bounded; remains available as a follow-up.
 
 **Order of operations:** prune first, then quantize - not the reverse. Pruning's importance ranking needs full FP16 precision to be meaningful; quantizing first would collapse weights onto a coarse grid before pruning could distinguish them. Zero always quantizes to zero in every scheme used here, so pruned entries stay exactly zero through quantization with no interaction to worry about on that front.
 
@@ -914,35 +914,43 @@ Pruned models are still stored as dense FP16 (0.450 GB for Small, 1.423 GB for M
 - **No consistent method ordering exists on Medium-EN**, unlike Small-EN where fp8_naive < bnb_fp4 < fp4_naive held at every single sparsity level. On Medium-EN the ranking flips inconsistently point to point (e.g. at 10% bnb_fp4 is actually the BEST performer, not the worst) - consistent with genuine noise around a near-zero mean rather than a real ordering.
 - **This is a materially stronger version of the "convergence at scale" finding than the original 2-point data suggested**: it is not merely that methods land close together at isolated sparsity levels, but that the entire concept of method-ranking breaks down at 769M scale across the whole tested range - differences are small enough to be indistinguishable from run-to-run noise.
 
-### Small-multilingual Complete (6/6)
+### Small-multilingual Complete (15/15) - Full Five-Point Sparsity Curve
 
-| Method | 30% sparsity | 45% sparsity | Wanda-only ref (30%/45%) |
+| Sparsity | fp8_naive | fp4_naive | bnb_fp4 | Wanda-only ref |
+|---|---|---|---|---|
+| 10% | 9.99% (Δ+0.27) | 9.97% (Δ+0.25) | 9.65% (Δ-0.07) | 9.72% |
+| 20% | 10.05% (Δ+0.08) | 10.67% (Δ+0.70) | 10.13% (Δ+0.16) | 9.97% |
+| 30% | 10.16% (Δ+0.00) | 11.17% (Δ+1.01) | 10.31% (Δ+0.15) | 10.16% |
+| 40% | 11.14% (Δ+0.13) | 11.93% (Δ+0.92) | 11.00% (Δ-0.01) | 11.01% |
+| 45% | 11.90% (Δ+0.25) | 14.28% (Δ+2.63) | 12.53% (Δ+0.88) | 11.65% |
+
+**ALL 45 COMBINATIONS NOW COMPLETE (3 variants × 5 sparsity levels × 3 methods).**
+
+**A third, distinct curve shape - neither Small-EN's U-curve nor Medium-EN's flat convergence:**
+
+- **fp8_naive stays remarkably flat and near-zero across the entire range** (+0.00 to +0.27) - closer to Medium-EN's behavior than to Small-EN's, DESPITE matching Small-EN's capacity (244M). This is the first clear case where a grid-preserving method's SHAPE tracks something other than capacity alone.
+- **bnb_fp4 also stays flat and near-zero throughout** (-0.07 to +0.16) with NO U-shaped dip at 30% - the biggest structural difference from Small-EN, whose bnb_fp4 dipped to -0.41 at the same sparsity. Small-multilingual's bnb_fp4 shows no dip anywhere in the curve.
+- **fp4_naive is the only method showing real sparsity-dependence**, and its shape differs from Small-EN's plateau-then-late-escalation pattern - Small-multilingual's fp4_naive trends closer to a smooth, continuous increase (+0.25 → +0.70 → +1.01 → +0.92 → +2.63), with a minor dip at 40% breaking perfect monotonicity but an overall different growth character than Small-EN's flat-then-jump curve.
+
+**This refines, rather than simply confirms, the earlier two-point "language separates from capacity" finding.** The original 30%/45%-only comparison suggested Small-multilingual sits at roughly half of Small-EN's severity with a similar shape, scaled down. The full five-point curves show the SHAPES themselves differ, not just the magnitude: Small-multilingual's grid-preserving methods (fp8_naive, bnb_fp4) behave almost like Medium-EN's (flat, small, no dip), while only fp4_naive retains meaningful sparsity-sensitivity - with its own distinct growth character rather than a scaled-down copy of Small-EN's curve.
+
+### Cross-Model Curve-Shape Synthesis (All 45 Combinations)
+
+With the full five-point curve available for all three variants, the shapes themselves - not just the endpoint severities - can now be compared directly.
+
+| Variant | fp8_naive shape | bnb_fp4 shape | fp4_naive shape |
 |---|---|---|---|
-| fp8_naive | 10.16% (+0.25) | 11.90% (+1.99) | 10.16% / 11.65% |
-| bnb_fp4 | 10.31% (+0.40) | 12.53% (+2.62) | 10.16% / 11.65% |
-| fp4_naive | 11.17% (+1.26) | 14.28% (+4.37) | 10.16% / 11.65% |
+| Small-EN | U-shaped, dips to -0.46 at 30% | U-shaped, dips to -0.41 at 30% | Severe from 10% onward (+3.11), plateau to 40%, sharp jump at 45% (+5.01) |
+| Medium-EN | Flat, noisy, ±0.3pp band throughout | Flat, noisy, ±0.3pp band throughout | Flat, noisy, ±0.3pp band throughout |
+| Small-multilingual | Flat and near-zero throughout (+0.00 to +0.27) | Flat and near-zero throughout, NO dip (-0.07 to +0.16) | Smooth continuous increase (+0.25 → +2.63), distinct from Small-EN's plateau-then-jump |
 
-**A third distinct interaction pattern for fp8_naive:** at 30%, fp8_naive is essentially IDENTICAL to Wanda-only pruning alone (ΔWanda ≈ 0.00, vs Small-EN's synergy of -0.46 and Medium-EN's mild compound of +0.16) - neither helping nor hurting. At 45%, all three variants converge to a narrow band of mild compounding (+0.22 to +0.26), suggesting fp8_naive's interaction with pruning becomes variant-independent at higher sparsity even though it diverges by variant at lower sparsity.
+**Three findings emerge only from comparing shapes across all three variants together:**
 
-**fp4_naive reveals a clean three-point severity gradient across all three variants, separating capacity from language/distribution effects for the first time in this study:**
+1. **The U-shaped dip at 30% is specific to Small-EN, not a general property of grid-preserving methods.** Both fp8_naive and bnb_fp4 dip at 30% on Small-EN, but neither dips on Small-multilingual despite matching capacity (244M) - the dip appears tied to Small-EN's specific EN-fine-tuned weight distribution (Rule 12's non-Gaussian finding), not to model size.
+2. **Medium-EN's flatness is uniquely total** - all three methods, not just the grid-preserving ones, stay within a tight noise band across the entire range. Neither Small-EN nor Small-multilingual show this for fp4_naive, which remains the most sparsity-sensitive method on both smaller-capacity variants regardless of language.
+3. **fp4_naive's growth shape differs between the two same-capacity variants** (Small-EN's plateau-then-jump vs. Small-multilingual's smoother continuous increase) even though both are clearly more sparsity-sensitive than fp8_naive/bnb_fp4 on their own variant. This means language affects not just HOW SEVERE fp4_naive's compounding becomes, but the SHAPE of how it accumulates with sparsity - a more specific and mechanistic finding than the original two-point "roughly half the severity" comparison could reveal.
 
-| | 30% sparsity | 45% sparsity |
-|---|---|---|
-| Small-EN (244M, EN fine-tuned) | +2.40 | +5.01 |
-| Small-multilingual (244M, multilingual) | +1.01 | +2.63 |
-| Medium-EN (769M, EN fine-tuned) | +0.11 | +0.23 |
-
-Small-EN and Small-multilingual share identical capacity (244M) yet Small-multilingual's fp4_naive compounding is consistently about half of Small-EN's at both sparsity levels - this isolates a LANGUAGE/DISTRIBUTION effect (consistent with Rule 12's near-Gaussian vs non-Gaussian weight distribution finding from the quantization study), independent of capacity. Medium-EN then adds a CAPACITY effect on top, reducing the remaining gap to near-zero. This is the first result in the combined pruning+quantization study where language and capacity effects can be seen acting at least partially independently, rather than only jointly as in the two-variant comparisons available previously.
-
-**Runtime note:** fp4_naive Small-multilingual (55.5-57.6 min E2E) runs noticeably longer than fp4_naive Small-EN (~50 min) despite identical model size - consistent with the multilingual tokenizer's forced `language="en"`/`task="transcribe"` generation overhead already documented in Week 7, now confirmed to persist through the combined pruning+quantization pipeline as well.
-
-**bnb_fp4 completes the picture: the synergy-to-compound crossover seen on Small-EN reproduces here too, more mildly.** ΔWanda goes from +0.15 at 30% to +0.88 at 45% - same crossover shape as Small-EN's bnb_fp4 (-0.41 to +1.21), just less extreme, consistent with Small-multilingual sitting between Small-EN and Medium-EN across the board.
-
-**With all 18 combinations complete, the severity gradient (Small-EN > Small-multi > Medium-EN) holds for bnb_fp4 and fp4_naive, but nearly vanishes for fp8_naive.** At 45% sparsity: fp8_naive spans only 0.04pp across all three variants (0.22-0.26), while fp4_naive spans 4.78pp (0.23-5.01) across the same three variants. The language/capacity-separates-compounding-severity finding is specifically pronounced for the grid-based LUT methods (fp4_naive, and bnb_fp4 to a lesser extent) and nearly absent for fp8_naive - compounding severity depends on BOTH variant AND which quantization grid is involved, not variant alone.
-
-**bnb_fp4 sits consistently between fp8_naive and fp4_naive in severity, for every variant tested** - not just the Small-EN case where the crossover was first observed, but now confirmed as a general ordering (fp8_naive mildest, bnb_fp4 intermediate, fp4_naive worst) holding across all three variants.
-
-**All 18 combinations (3 variants × 2 sparsity levels × 3 methods) are now complete.** Combined pruning + quantization study (Week 9) concluded.
+**Practical deployment takeaway:** for Medium-EN, quantization method choice is genuinely irrelevant across the entire practical sparsity range (10-45%) - pick whichever is most convenient (bnb_fp4 for size, fp8_naive for simplicity). For Small-EN and Small-multilingual, fp4_naive should be avoided at any sparsity level if fp8_naive or bnb_fp4 are available, since fp4_naive is never the best choice at any tested point on either smaller-capacity variant.
 
 ### Size: Actual vs. Theoretical, and a Real Implementation Gap Worth Documenting
 
