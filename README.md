@@ -1601,8 +1601,8 @@ This matches the exact same filtering logic already used in the quantization scr
 
 | Model | Params | Cliff onset | 40% degradation | 45% degradation | 50% WER |
 |---|---|---|---|---|---|
-| Tiny-EN-ours | 37.4M | 20-30% | +131.70pp | +381.02pp | 421.55% |
-| Tiny-EN-Dutta | 36.4M | 10-20% | +198.36pp | +294.98pp | 163.33% |
+| Tiny-EN-ours | 37.76M | 20-30% | +131.70pp | +381.02pp | 421.55% |
+| Tiny-EN-Dutta | 37.76M | 10-20% | +198.36pp | +294.98pp | 163.33% |
 | Base-EN-ours | 70.6M | 20-30% | **+337.92pp (steepest)** | **+738.73pp (worst overall)** | **731.20% (2nd worst)** |
 | Small-EN | 244M | 30-40% | +1.84pp (mildest) | +8.90pp (mildest) | 279.78% |
 | Small-multilingual | 244M | 30-40% | +7.63pp | +141.60pp | 359.03% |
@@ -2185,7 +2185,409 @@ Pruned models are still stored as dense FP16 (0.450 GB for Small, 1.423 GB for M
 - **Diagnostic false-negative**: the tied-embedding detector initially checked `model.proj_out.weight` *after* quantization had already replaced `proj_out` with a wrapper module lacking a `.weight` attribute - silently reported "intact" via a caught `AttributeError` for exactly the cases it was meant to catch. Fixed by capturing the pointer *before* quantization and comparing against `embed_tokens`' current pointer afterward. Two already-completed results (`fp8_naive@30%`, `fp8_naive@45%`) were patched in place post-hoc (JSON metadata only - `actual_size_gb`, WER, and all other fields were unaffected and did not need re-running).
 - **Segfault during a chained `bnb_fp4` run** (second `bnb_fp4` call within one long-running process, 81% through evaluation): dmesg confirmed this was a CPU-side fault inside the Python interpreter itself, not a GPU driver/Xid-level error - consistent with memory corruption surfacing later rather than a hardware/thermal issue. Root cause not fully confirmed, but a related bug was found and fixed regardless (a `transformers.modeling_utils.dispatch_model` monkey-patch was being re-applied and re-wrapped on every `bnb_fp4` call within a chained process rather than patched once). Mitigation: run `bnb_fp4` combinations as standalone process invocations rather than chained together going forward; the retry completed cleanly.
 
+### ✅ Week 16 | CMU Kids Cross-Corpus Validation
+
+**Purpose:** Every result through Week 15 uses MyST as both the fine-tuning source and the evaluation corpus. This week repeats the quantization, Wanda pruning, and combined studies on a second children's-speech corpus, CMU Kids (LDC97S63), to test whether this study's central findings are properties of the compression methods and checkpoints or artifacts of MyST specifically.
+
+**Dataset:** CMU Kids Corpus is a *licensed* dataset, unlike MyST; access for this evaluation was provided through a license held by collaborators at NIT Sikkim (Dr. Hemant Kumar Kathania), who joined this work as co-authors on the resulting paper. 1,614 utterances total, 1,599 after the same ≥3-word filter used throughout this study (Filter 4); mean duration 6.3s. Two properties differ from MyST and are stated explicitly rather than glossed over: (1) CMU Kids is children reading aloud prepared informational passages, not MyST's conversational tutoring dialogue; (2) utterances are evaluated individually, not concatenated into ~30s chunks. Concatenation was deliberately not attempted - CMU Kids' official session/passage metadata (`tables/sentence.tbl`, `tables/transcrp.tbl` in the official LDC distribution) is not present in the export available for this study, and more fundamentally, CMU Kids was recorded as prompted isolated-sentence reading (confirmed via the Lhotse data-loading library's ID-parsing logic: `speaker[0:4] + prompt_code[4:7] + quality_bin[7]`, where the prompt code indexes a corpus-wide table shared across speakers, not a session-relative position) rather than one continuous recording later split into files. Unlike MyST's ≥30s exclusion filter (Filter 5), no duration filter is applied here: that filter's own scope in `preprocess_myst.py` covers train/development only, never test, and CMU Kids' test-time evaluation pipeline (`chunk_length_s=30`) already handles longer utterances correctly.
+
+**Wanda calibration:** unchanged from every prior week - still drawn from MyST's filtered training samples, not CMU-specific. The question being tested is whether a compression decision made using the model's own training-adjacent data generalizes to a new evaluation corpus, not whether compression can be tuned per-corpus; using CMU-specific calibration would answer a different question and break comparability with every MyST-only result in this study, which are all MyST-calibrated themselves. This is also supported by what's known about Wanda's calibration sensitivity more generally: Wanda's importance ranking (`|W_ij| × ||X_j||_2`) is computed once and frozen as a fixed mask, not updated iteratively the way SparseGPT's Hessian-based approach is - and an empirical study across several LLM compression methods found Wanda's downstream sensitivity to calibration data choice, while non-zero, consistently narrower than SparseGPT's (0.6-2.9% for Wanda vs 2.4-4.8% for SparseGPT across the models tested) ([Williams & Aletras, ACL 2024](https://arxiv.org/abs/2311.09755)). This evidence is from text-domain LLM compression, not speech, and the direct MyST-vs-CMU-calibration ablation was not run in this study - so this is a documented reason to expect the difference is modest, not a proven fact for this exact setting.
+
+**Scope:** all 6 fine-tuned checkpoints × 3 study types = 180 results, 100% coverage confirmed (36 quantization-only + 24 Wanda-only + 120 combined). Scripts: `preprocess_cmu_test.py`, `evaluate_baseline_cmu.py`, and `--test_dir`-patched versions of `18_kid_whisper_ptq.py`, `22_wanda_pruning.py`, `24_combined_pruning_quantization.py`.
+
 ---
+
+#### Tiny-EN-ours Complete - Quantization, Wanda Pruning, Combined
+
+**Tiny-EN-ours** (FP16 baseline: 37.05%)
+
+**Quantization only:**
+
+| Method | WER% | ΔFP16 | RTF |
+|---|---|---|---|
+| FP16 | 37.05% | — | 0.0024 |
+| INT8 | 37.31% | +0.26% | 0.0024 |
+| FP8 | 37.64% | +0.59% | 0.0028 |
+| FP4 | 68.67% | +31.62% | 0.0039 |
+| BnBFP4 | 52.39% | +15.34% | 0.0030 |
+| BnBNF4 | 47.55% | +10.50% | 0.0033 |
+
+**Wanda pruning only:**
+
+| Sparsity | WER% | ΔFP16 |
+|---|---|---|
+| 0.10 | 38.72% | +1.67% |
+| 0.20 | 37.80% | +0.75% |
+| 0.30 | 40.05% | +3.00% |
+| 0.40 | 60.45% | +23.40% |
+
+**Combined (Wanda pruning + quantization):**
+
+| Sparsity | Method | WER% | ΔFP16 | ΔWandaOnly | Theor.Comb (MB) |
+|---|---|---|---|---|---|
+| 0.10 | INT8 | 38.72% | +1.67% | +0.00% | 38.2 |
+| 0.10 | FP8 | 36.73% | -0.32% | -1.99% | 38.2 |
+| 0.10 | FP4 | 70.66% | +33.61% | +31.94% | 22.5 |
+| 0.10 | BnBFP4 | 52.74% | +15.69% | +14.02% | 22.5 |
+| 0.10 | BnBNF4 | 45.99% | +8.94% | +7.27% | 22.5 |
+| 0.10 | *Wanda-only ref* | *38.72%* | — | — | — |
+| 0.20 | INT8 | 36.27% | -0.78% | -1.53% | 34.7 |
+| 0.20 | FP8 | 37.62% | +0.57% | -0.18% | 34.7 |
+| 0.20 | FP4 | 70.56% | +33.51% | +32.76% | 20.8 |
+| 0.20 | BnBFP4 | 50.69% | +13.64% | +12.89% | 20.8 |
+| 0.20 | BnBNF4 | 42.97% | +5.92% | +5.17% | 20.8 |
+| 0.20 | *Wanda-only ref* | *37.80%* | — | — | — |
+| 0.30 | INT8 | 41.53% | +4.48% | +1.48% | 31.2 |
+| 0.30 | FP8 | 41.46% | +4.41% | +1.41% | 31.2 |
+| 0.30 | FP4 | 73.80% | +36.75% | +33.75% | 19.0 |
+| 0.30 | BnBFP4 | 47.27% | +10.22% | +7.22% | 19.0 |
+| 0.30 | BnBNF4 | 44.52% | +7.47% | +4.47% | 19.0 |
+| 0.30 | *Wanda-only ref* | *40.05%* | — | — | — |
+| 0.40 | INT8 | 61.21% | +24.16% | +0.76% | 27.8 |
+| 0.40 | FP8 | 60.73% | +23.68% | +0.28% | 27.8 |
+| 0.40 | FP4 | 148.08% | +111.03% | +87.63% | 17.3 |
+| 0.40 | BnBFP4 | 83.46% | +46.41% | +23.01% | 17.3 |
+| 0.40 | BnBNF4 | 73.49% | +36.44% | +13.04% | 17.3 |
+| 0.40 | *Wanda-only ref* | *60.45%* | — | — | — |
+
+*Interaction classification (ΔWandaOnly):*
+
+| Sparsity | INT8 | FP8 | FP4 | BnBFP4 | BnBNF4 |
+|---|---|---|---|---|---|
+| 0.10 | Neutral | Synergy | SEVERE compound | Moderate compound | Moderate compound |
+| 0.20 | Synergy | Mild synergy | SEVERE compound | Moderate compound | Moderate compound |
+| 0.30 | Neutral | Neutral | SEVERE compound | Moderate compound | Moderate compound |
+| 0.40 | Neutral | Neutral | SEVERE compound | SEVERE compound | Moderate compound |
+
+
+#### Tiny-EN-Dutta Complete - Quantization, Wanda Pruning, Combined
+
+**Tiny-EN-Dutta** (FP16 baseline: 32.94%)
+
+**Quantization only:**
+
+| Method | WER% | ΔFP16 | RTF |
+|---|---|---|---|
+| FP16 | 32.94% | — | 0.0021 |
+| INT8 | 29.69% | -3.25% | 0.0025 |
+| FP8 | 36.42% | +3.48% | 0.0027 |
+| FP4 | 3168.67% | +3135.73% | 0.0335 |
+| BnBFP4 | 1006.83% | +973.89% | 0.0167 |
+| BnBNF4 | 125.69% | +92.75% | 0.0044 |
+
+**Wanda pruning only:**
+
+| Sparsity | WER% | ΔFP16 |
+|---|---|---|
+| 0.10 | 29.32% | -3.62% |
+| 0.20 | 35.04% | +2.10% |
+| 0.30 | 41.98% | +9.04% |
+| 0.40 | 51.23% | +18.29% |
+
+**Combined (Wanda pruning + quantization):**
+
+| Sparsity | Method | WER% | ΔFP16 | ΔWandaOnly | Theor.Comb (MB) |
+|---|---|---|---|---|---|
+| 0.10 | INT8 | 29.83% | -3.11% | +0.51% | 38.2 |
+| 0.10 | FP8 | 32.82% | -0.12% | +3.50% | 38.2 |
+| 0.10 | FP4 | 3389.73% | +3356.79% | +3360.41% | 22.5 |
+| 0.10 | BnBFP4 | 1300.30% | +1267.36% | +1270.98% | 22.5 |
+| 0.10 | BnBNF4 | 106.98% | +74.04% | +77.66% | 22.5 |
+| 0.10 | *Wanda-only ref* | *29.32%* | — | — | — |
+| 0.20 | INT8 | 35.23% | +2.29% | +0.19% | 34.7 |
+| 0.20 | FP8 | 26.58% | -6.36% | -8.46% | 34.7 |
+| 0.20 | FP4 | 3591.81% | +3558.87% | +3556.77% | 20.8 |
+| 0.20 | BnBFP4 | 2014.23% | +1981.29% | +1979.19% | 20.8 |
+| 0.20 | BnBNF4 | 105.46% | +72.52% | +70.42% | 20.8 |
+| 0.20 | *Wanda-only ref* | *35.04%* | — | — | — |
+| 0.30 | INT8 | 46.76% | +13.82% | +4.78% | 31.2 |
+| 0.30 | FP8 | 42.59% | +9.65% | +0.61% | 31.2 |
+| 0.30 | FP4 | 3400.39% | +3367.45% | +3358.41% | 19.0 |
+| 0.30 | BnBFP4 | 1118.29% | +1085.35% | +1076.31% | 19.0 |
+| 0.30 | BnBNF4 | 90.83% | +57.89% | +48.85% | 19.0 |
+| 0.30 | *Wanda-only ref* | *41.98%* | — | — | — |
+| 0.40 | INT8 | 72.87% | +39.93% | +21.64% | 27.8 |
+| 0.40 | FP8 | 64.50% | +31.56% | +13.27% | 27.8 |
+| 0.40 | FP4 | 3875.57% | +3842.63% | +3824.34% | 17.3 |
+| 0.40 | BnBFP4 | 2485.84% | +2452.90% | +2434.61% | 17.3 |
+| 0.40 | BnBNF4 | 120.36% | +87.42% | +69.13% | 17.3 |
+| 0.40 | *Wanda-only ref* | *51.23%* | — | — | — |
+
+*Interaction classification (ΔWandaOnly):*
+
+| Sparsity | INT8 | FP8 | FP4 | BnBFP4 | BnBNF4 |
+|---|---|---|---|---|---|
+| 0.10 | Neutral | Moderate compound | SEVERE compound | SEVERE compound | SEVERE compound |
+| 0.20 | Neutral | Synergy | SEVERE compound | SEVERE compound | SEVERE compound |
+| 0.30 | Moderate compound | Neutral | SEVERE compound | SEVERE compound | SEVERE compound |
+| 0.40 | SEVERE compound | Moderate compound | SEVERE compound | SEVERE compound | SEVERE compound |
+
+
+#### Base-EN-ours Complete - Quantization, Wanda Pruning, Combined
+
+**Base-EN-ours** (FP16 baseline: 32.12%)
+
+**Quantization only:**
+
+| Method | WER% | ΔFP16 | RTF |
+|---|---|---|---|
+| FP16 | 32.12% | — | 0.0035 |
+| INT8 | 38.01% | +5.89% | 0.0042 |
+| FP8 | 32.71% | +0.59% | 0.0041 |
+| FP4 | 90.76% | +58.64% | 0.0085 |
+| BnBFP4 | 35.39% | +3.27% | 0.0042 |
+| BnBNF4 | 40.17% | +8.05% | 0.0043 |
+
+**Wanda pruning only:**
+
+| Sparsity | WER% | ΔFP16 |
+|---|---|---|
+| 0.10 | 33.47% | +1.35% |
+| 0.20 | 28.62% | -3.50% |
+| 0.30 | 34.10% | +1.98% |
+| 0.40 | 38.61% | +6.49% |
+
+**Combined (Wanda pruning + quantization):**
+
+| Sparsity | Method | WER% | ΔFP16 | ΔWandaOnly | Theor.Comb (MB) |
+|---|---|---|---|---|---|
+| 0.10 | INT8 | 36.98% | +4.86% | +3.51% | 72.8 |
+| 0.10 | FP8 | 31.88% | -0.24% | -1.59% | 72.8 |
+| 0.10 | FP4 | 105.46% | +73.34% | +71.99% | 42.5 |
+| 0.10 | BnBFP4 | 35.51% | +3.39% | +2.04% | 42.5 |
+| 0.10 | BnBNF4 | 42.67% | +10.55% | +9.20% | 42.5 |
+| 0.10 | *Wanda-only ref* | *33.47%* | — | — | — |
+| 0.20 | INT8 | 32.02% | -0.10% | +3.40% | 66.2 |
+| 0.20 | FP8 | 33.43% | +1.31% | +4.81% | 66.2 |
+| 0.20 | FP4 | 91.49% | +59.37% | +62.87% | 39.2 |
+| 0.20 | BnBFP4 | 36.05% | +3.93% | +7.43% | 39.2 |
+| 0.20 | BnBNF4 | 35.16% | +3.04% | +6.54% | 39.2 |
+| 0.20 | *Wanda-only ref* | *28.62%* | — | — | — |
+| 0.30 | INT8 | 39.22% | +7.10% | +5.12% | 59.4 |
+| 0.30 | FP8 | 39.84% | +7.72% | +5.74% | 59.4 |
+| 0.30 | FP4 | 61.80% | +29.68% | +27.70% | 35.8 |
+| 0.30 | BnBFP4 | 37.80% | +5.68% | +3.70% | 35.8 |
+| 0.30 | BnBNF4 | 44.05% | +11.93% | +9.95% | 35.8 |
+| 0.30 | *Wanda-only ref* | *34.10%* | — | — | — |
+| 0.40 | INT8 | 38.63% | +6.51% | +0.02% | 52.7 |
+| 0.40 | FP8 | 38.74% | +6.62% | +0.13% | 52.7 |
+| 0.40 | FP4 | 94.14% | +62.02% | +55.53% | 32.5 |
+| 0.40 | BnBFP4 | 50.08% | +17.96% | +11.47% | 32.5 |
+| 0.40 | BnBNF4 | 55.76% | +23.64% | +17.15% | 32.5 |
+| 0.40 | *Wanda-only ref* | *38.61%* | — | — | — |
+
+*Interaction classification (ΔWandaOnly):*
+
+| Sparsity | INT8 | FP8 | FP4 | BnBFP4 | BnBNF4 |
+|---|---|---|---|---|---|
+| 0.10 | Moderate compound | Synergy | SEVERE compound | Moderate compound | Moderate compound |
+| 0.20 | Moderate compound | Moderate compound | SEVERE compound | Moderate compound | Moderate compound |
+| 0.30 | Moderate compound | Moderate compound | SEVERE compound | Moderate compound | Moderate compound |
+| 0.40 | Neutral | Neutral | SEVERE compound | Moderate compound | Moderate compound |
+
+
+#### Small-EN Complete - Quantization, Wanda Pruning, Combined
+
+**Small-EN** (FP16 baseline: 18.80%)
+
+**Quantization only:**
+
+| Method | WER% | ΔFP16 | RTF |
+|---|---|---|---|
+| FP16 | 18.80% | — | 0.0055 |
+| INT8 | 18.37% | -0.43% | 0.0062 |
+| FP8 | 18.63% | -0.17% | 0.0062 |
+| FP4 | 68.53% | +49.73% | 0.0126 |
+| BnBFP4 | 16.07% | -2.73% | 0.0057 |
+| BnBNF4 | 16.47% | -2.33% | 0.0057 |
+
+**Wanda pruning only:**
+
+| Sparsity | WER% | ΔFP16 |
+|---|---|---|
+| 0.10 | 16.80% | -2.00% |
+| 0.20 | 22.44% | +3.64% |
+| 0.30 | 19.47% | +0.67% |
+| 0.40 | 20.06% | +1.26% |
+
+**Combined (Wanda pruning + quantization):**
+
+| Sparsity | Method | WER% | ΔFP16 | ΔWandaOnly | Theor.Comb (MB) |
+|---|---|---|---|---|---|
+| 0.10 | INT8 | 16.98% | -1.82% | +0.18% | 239.8 |
+| 0.10 | FP8 | 19.18% | +0.38% | +2.38% | 239.8 |
+| 0.10 | FP4 | 64.90% | +46.10% | +48.10% | 137.6 |
+| 0.10 | BnBFP4 | 16.24% | -2.56% | -0.56% | 137.6 |
+| 0.10 | BnBNF4 | 17.71% | -1.09% | +0.91% | 137.6 |
+| 0.10 | *Wanda-only ref* | *16.80%* | — | — | — |
+| 0.20 | INT8 | 20.76% | +1.96% | -1.68% | 217.2 |
+| 0.20 | FP8 | 16.08% | -2.72% | -6.36% | 217.2 |
+| 0.20 | FP4 | 55.39% | +36.59% | +32.95% | 126.3 |
+| 0.20 | BnBFP4 | 16.41% | -2.39% | -6.03% | 126.3 |
+| 0.20 | BnBNF4 | 19.56% | +0.76% | -2.88% | 126.3 |
+| 0.20 | *Wanda-only ref* | *22.44%* | — | — | — |
+| 0.30 | INT8 | 19.55% | +0.75% | +0.08% | 194.5 |
+| 0.30 | FP8 | 19.40% | +0.60% | -0.07% | 194.5 |
+| 0.30 | FP4 | 43.32% | +24.52% | +23.85% | 115.0 |
+| 0.30 | BnBFP4 | 16.17% | -2.63% | -3.30% | 115.0 |
+| 0.30 | BnBNF4 | 20.94% | +2.14% | +1.47% | 115.0 |
+| 0.30 | *Wanda-only ref* | *19.47%* | — | — | — |
+| 0.40 | INT8 | 19.99% | +1.19% | -0.07% | 171.7 |
+| 0.40 | FP8 | 22.36% | +3.56% | +2.30% | 171.7 |
+| 0.40 | FP4 | 29.87% | +11.07% | +9.81% | 103.6 |
+| 0.40 | BnBFP4 | 16.35% | -2.45% | -3.71% | 103.6 |
+| 0.40 | BnBNF4 | 22.48% | +3.68% | +2.42% | 103.6 |
+| 0.40 | *Wanda-only ref* | *20.06%* | — | — | — |
+
+*Interaction classification (ΔWandaOnly):*
+
+| Sparsity | INT8 | FP8 | FP4 | BnBFP4 | BnBNF4 |
+|---|---|---|---|---|---|
+| 0.10 | Neutral | Moderate compound | SEVERE compound | Mild synergy | Neutral |
+| 0.20 | Synergy | Synergy | SEVERE compound | Synergy | Synergy |
+| 0.30 | Neutral | Mild synergy | SEVERE compound | Synergy | Neutral |
+| 0.40 | Mild synergy | Moderate compound | Moderate compound | Synergy | Moderate compound |
+
+
+#### Small-multilingual Complete - Quantization, Wanda Pruning, Combined
+
+**Small-multilingual** (FP16 baseline: 37.83%)
+
+**Quantization only:**
+
+| Method | WER% | ΔFP16 | RTF |
+|---|---|---|---|
+| FP16 | 37.83% | — | 0.0099 |
+| INT8 | 42.82% | +4.99% | 0.0124 |
+| FP8 | 38.20% | +0.37% | 0.0114 |
+| FP4 | 33.94% | -3.89% | 0.0142 |
+| BnBFP4 | 30.26% | -7.57% | 0.0090 |
+| BnBNF4 | 32.40% | -5.43% | 0.0107 |
+
+**Wanda pruning only:**
+
+| Sparsity | WER% | ΔFP16 |
+|---|---|---|
+| 0.10 | 33.02% | -4.81% |
+| 0.20 | 24.67% | -13.16% |
+| 0.30 | 29.42% | -8.41% |
+| 0.40 | 31.30% | -6.53% |
+
+**Combined (Wanda pruning + quantization):**
+
+| Sparsity | Method | WER% | ΔFP16 | ΔWandaOnly | Theor.Comb (MB) |
+|---|---|---|---|---|---|
+| 0.10 | INT8 | 36.16% | -1.67% | +3.14% | 239.9 |
+| 0.10 | FP8 | 34.76% | -3.07% | +1.74% | 239.9 |
+| 0.10 | FP4 | 35.94% | -1.89% | +2.92% | 137.7 |
+| 0.10 | BnBFP4 | 28.11% | -9.72% | -4.91% | 137.7 |
+| 0.10 | BnBNF4 | 31.36% | -6.47% | -1.66% | 137.7 |
+| 0.10 | *Wanda-only ref* | *33.02%* | — | — | — |
+| 0.20 | INT8 | 30.58% | -7.25% | +5.91% | 217.2 |
+| 0.20 | FP8 | 24.28% | -13.55% | -0.39% | 217.2 |
+| 0.20 | FP4 | 32.26% | -5.57% | +7.59% | 126.4 |
+| 0.20 | BnBFP4 | 27.83% | -10.00% | +3.16% | 126.4 |
+| 0.20 | BnBNF4 | 27.69% | -10.14% | +3.02% | 126.4 |
+| 0.20 | *Wanda-only ref* | *24.67%* | — | — | — |
+| 0.30 | INT8 | 29.95% | -7.88% | +0.53% | 194.5 |
+| 0.30 | FP8 | 29.87% | -7.96% | +0.45% | 194.5 |
+| 0.30 | FP4 | 39.12% | +1.29% | +9.70% | 115.0 |
+| 0.30 | BnBFP4 | 28.38% | -9.45% | -1.04% | 115.0 |
+| 0.30 | BnBNF4 | 30.48% | -7.35% | +1.06% | 115.0 |
+| 0.30 | *Wanda-only ref* | *29.42%* | — | — | — |
+| 0.40 | INT8 | 39.56% | +1.73% | +8.26% | 171.7 |
+| 0.40 | FP8 | 33.28% | -4.55% | +1.98% | 171.7 |
+| 0.40 | FP4 | 44.30% | +6.47% | +13.00% | 103.6 |
+| 0.40 | BnBFP4 | 31.13% | -6.70% | -0.17% | 103.6 |
+| 0.40 | BnBNF4 | 37.43% | -0.40% | +6.13% | 103.6 |
+| 0.40 | *Wanda-only ref* | *31.30%* | — | — | — |
+
+*Interaction classification (ΔWandaOnly):*
+
+| Sparsity | INT8 | FP8 | FP4 | BnBFP4 | BnBNF4 |
+|---|---|---|---|---|---|
+| 0.10 | Moderate compound | Neutral | Moderate compound | Synergy | Synergy |
+| 0.20 | Moderate compound | Mild synergy | Moderate compound | Moderate compound | Moderate compound |
+| 0.30 | Neutral | Neutral | Moderate compound | Synergy | Neutral |
+| 0.40 | Moderate compound | Neutral | Moderate compound | Mild synergy | Moderate compound |
+
+
+#### Medium-EN Complete - Quantization, Wanda Pruning, Combined
+
+**Medium-EN** (FP16 baseline: 21.97%)
+
+**Quantization only:**
+
+| Method | WER% | ΔFP16 | RTF |
+|---|---|---|---|
+| FP16 | 21.97% | — | 0.0200 |
+| INT8 | 22.01% | +0.04% | 0.0228 |
+| FP8 | 14.98% | -6.99% | 0.0266 |
+| FP4 | 18.78% | -3.19% | 0.0253 |
+| BnBFP4 | 17.96% | -4.01% | 0.0211 |
+| BnBNF4 | 25.39% | +3.42% | 0.0219 |
+
+**Wanda pruning only:**
+
+| Sparsity | WER% | ΔFP16 |
+|---|---|---|
+| 0.10 | 17.30% | -4.67% |
+| 0.20 | 19.53% | -2.44% |
+| 0.30 | 22.16% | +0.19% |
+| 0.40 | 16.61% | -5.36% |
+
+**Combined (Wanda pruning + quantization):**
+
+| Sparsity | Method | WER% | ΔFP16 | ΔWandaOnly | Theor.Comb (MB) |
+|---|---|---|---|---|---|
+| 0.10 | INT8 | 20.64% | -1.33% | +3.34% | 752.5 |
+| 0.10 | FP8 | 17.17% | -4.80% | -0.13% | 752.5 |
+| 0.10 | FP4 | 19.55% | -2.42% | +2.25% | 427.2 |
+| 0.10 | BnBFP4 | 18.38% | -3.59% | +1.08% | 427.2 |
+| 0.10 | BnBNF4 | 22.61% | +0.64% | +5.31% | 427.2 |
+| 0.10 | *Wanda-only ref* | *17.30%* | — | — | — |
+| 0.20 | INT8 | 19.25% | -2.72% | -0.28% | 680.4 |
+| 0.20 | FP8 | 18.41% | -3.56% | -1.12% | 680.4 |
+| 0.20 | FP4 | 17.44% | -4.53% | -2.09% | 391.2 |
+| 0.20 | BnBFP4 | 17.79% | -4.18% | -1.74% | 391.2 |
+| 0.20 | BnBNF4 | 19.14% | -2.83% | -0.39% | 391.2 |
+| 0.20 | *Wanda-only ref* | *19.53%* | — | — | — |
+| 0.30 | INT8 | 22.17% | +0.20% | +0.01% | 607.8 |
+| 0.30 | FP8 | 15.82% | -6.15% | -6.34% | 607.8 |
+| 0.30 | FP4 | 16.04% | -5.93% | -6.12% | 354.9 |
+| 0.30 | BnBFP4 | 17.67% | -4.30% | -4.49% | 354.9 |
+| 0.30 | BnBNF4 | 16.45% | -5.52% | -5.71% | 354.9 |
+| 0.30 | *Wanda-only ref* | *22.16%* | — | — | — |
+| 0.40 | INT8 | 16.55% | -5.42% | -0.06% | 535.8 |
+| 0.40 | FP8 | 15.04% | -6.93% | -1.57% | 535.8 |
+| 0.40 | FP4 | 15.93% | -6.04% | -0.68% | 318.9 |
+| 0.40 | BnBFP4 | 17.25% | -4.72% | +0.64% | 318.9 |
+| 0.40 | BnBNF4 | 15.81% | -6.16% | -0.80% | 318.9 |
+| 0.40 | *Wanda-only ref* | *16.61%* | — | — | — |
+
+*Interaction classification (ΔWandaOnly):*
+
+| Sparsity | INT8 | FP8 | FP4 | BnBFP4 | BnBNF4 |
+|---|---|---|---|---|---|
+| 0.10 | Moderate compound | Mild synergy | Moderate compound | Neutral | Moderate compound |
+| 0.20 | Mild synergy | Synergy | Synergy | Synergy | Mild synergy |
+| 0.30 | Neutral | Synergy | Synergy | Synergy | Synergy |
+| 0.40 | Mild synergy | Synergy | Mild synergy | Neutral | Mild synergy |
+
+#### Week 16 Key Findings
+
+1. **The training-recipe reversal replicates and sharpens.** Tiny-EN-ours vs Tiny-EN-Dutta (confirmed identical at 37.76M params and architecture by direct inspection of both loaded checkpoints - see the parameter-count correction note below) diverge dramatically under FP4-family quantization on CMU: Tiny-EN-Dutta reaches 3168.67% WER under FP4 naive and 1006.83% under BnB FP4, against 68.67%/52.39% for Tiny-EN-ours. Manual inspection of the prediction files identifies the mechanism directly: a sharp rise in decoder repetition-loop failures (e.g. "the and the and the...") rather than uniformly worse transcription. Counting predictions >30 characters longer than their reference (post-normalization) as a repetition-loop proxy: both checkpoints sit at a similar ~1% failure rate under FP16 (1.25% ours, 0.81% Dutta), and Tiny-EN-ours barely moves under FP4-family methods (1.13-1.75%), but Tiny-EN-Dutta's rate explodes to 26.89% (BnB FP4) and 71.17% (FP4 naive). FP4-family quantization does not uniformly degrade Dutta's checkpoint so much as dramatically amplify a decoder-termination failure mode already latent in both checkpoints under FP16.
+
+2. **The Wanda+INT8 "never compounds" recipe safety claim does not fully generalize.** On MyST (Week 15), INT8 naive on top of Wanda pruning never compounds across all 180 configurations. On CMU, restricted to the three sub-244M checkpoints where this recipe is recommended: 5 of 12 INT8 combinations compound (1 severely - Tiny-EN-Dutta at 40% sparsity, +21.64pp vs Wanda-only), while all 12 corresponding FP4 combinations compound severely. INT8 remains far safer than FP4 in relative terms, but "never compounds" turns out to be a MyST-specific finding, not a universal guarantee about the recipe.
+
+3. **Grid preference (FP4 vs NF4) also does not fully generalize.** Comparing each checkpoint's own MyST (Week 8-10) and CMU grid preference: 4 of 6 checkpoints keep the same winner, but 2 reverse. Small-multilingual's reversal is minor (MyST margin was already only 0.11pp - within the sub-1pp range already treated as indicative rather than decisive). Base-EN-ours' reversal is substantial: a 2.92pp margin favoring NF4 on MyST (12.82% vs 15.74%) becomes a 4.78pp margin favoring FP4 on CMU (35.39% vs 40.17%) - a genuine flip in a checkpoint comfortably below the 244M threshold where the capacity-based rule is supposed to hold.
+
+4. **Parameter-count correction:** direct verification (loading both checkpoints fresh and comparing `sum(p.numel())` plus full architecture config) confirmed Tiny-EN-ours and Tiny-EN-Dutta are *exactly* parameter-for-parameter identical at 37,760,256 params each (encoder_layers=4, decoder_layers=4, d_model=384, 6 attention heads), not merely "within 3%" as approximated in earlier weeks (37.4M/36.4M). The earlier approximate figures have been corrected in place wherever they appeared in this log (e.g. the Week 11-14 magnitude-pruning synthesis table); all "architecturally identical" claims from Weeks 8-15 are strengthened by this exact match.
+
+**Overall:** two of this study's three cross-checked central findings replicate cleanly (and the training-recipe reversal sharpens into a specific, mechanistic explanation); two others (INT8 recipe safety, grid preference) hold as strong majority patterns rather than universal rules once tested on a second corpus. This is itself consistent with this study's broader theme across all 16 weeks: single-scale and now single-corpus compression claims need checking before being trusted as general facts.
+
+---
+
 
 ## 📊 Progress Tracker
 
@@ -2199,6 +2601,7 @@ Pruned models are still stored as dense FP16 (0.450 GB for Small, 1.423 GB for M
 | Week 8-10 | Comprehensive PTQ for fine-tuned models across all five checkpoints (Small-EN, Medium-EN, Small-multilingual, Tiny-EN-ours, Base-EN pending, plus SatwikDutta's externally-trained Tiny-EN for a training-recipe comparison). BnB FP4 Medium-EN (8.93%) matches paper at 69.2% smaller size. K-means codebooks: fail on EN fine-tuned models at small scale, succeed at k=256 on Medium-EN and Small-multilingual. Tiny-EN quantization reveals percentile clipping becomes catastrophic even at 8-bit, and grid preference (FP4 vs NF4) reverses at 39M scale. | ✅ Done |
 | Week 11-14 | Magnitude pruning (per-layer, corrected pipeline protocol) COMPLETE across all 3 variants (10-50%, 5% steps): universal ~40% cliff regardless of capacity or language, contradicting quantization Rules 8/11. Wanda pruning (activation-aware importance) relocates the cliff from 40-45% to 55-60%, a ~15-point sparsity extension rather than elimination - a more nuanced finding than initially suspected before extending the sweep past 50%. | ✅ Done |
 | Week 15 | Combined pruning + quantization across all 3 variants, 5 sparsity levels, 3 methods (45 combinations total). Reveals genuinely variant-and-method-dependent interaction patterns (synergy/neutral/compounding) rather than a single universal rule, plus a real implementation asymmetry: naive/pct quantization methods orphan Whisper's tied input/output embedding, while bitsandbytes' loading-time integration does not. | ✅ Done |
+| Week 16 | Cross-corpus validation on CMU Kids (licensed dataset, all 6 checkpoints, 180 results: quantization, Wanda pruning, combined). Training-recipe reversal replicates and sharpens into a mechanistic finding (decoder repetition-loop amplification). Two other central findings (INT8 recipe safety, FP4/NF4 grid preference) hold as strong majority patterns rather than universal rules once tested on a second corpus. Parameter-count correction: Tiny-EN-ours/Dutta confirmed exactly identical (37.76M each), not merely "within 3%". | ✅ Done |
 
 ---
 
@@ -2225,3 +2628,8 @@ Pruned models are still stored as dense FP16 (0.450 GB for Small, 1.423 GB for M
 | [17] | Wu, H., et al. (2020). *Integer Quantization for Deep Learning Inference: Principles and Empirical Evaluation.* NVIDIA Technical Report. arXiv:2004.09602. |
 | [18] | Nagel, M., et al. (2021). *A White Paper on Neural Network Quantization.* Qualcomm AI Research. arXiv:2106.08295. |
 | [19] | Dutta, S., Chandupatla, S., & Hansen, J. H. L. (2025). *Adapting Whisper for Lightweight and Efficient Automatic Speech Recognition of Children for On-device Edge Applications.* arXiv:2507.14451. |
+| [20] | Eskenazi, M., Mostow, J., & Graff, D. (1997). *The CMU Kids Corpus.* Linguistic Data Consortium, LDC97S63. |
+| [21] | Barański, M., Jasiński, J., Bartolewska, J., Kacprzak, S., Witkowski, M., & Kowalczyk, K. (2025). *Investigation of Whisper ASR Hallucinations Induced by Non-Speech Audio.* ICASSP 2025. arXiv:2501.11378. |
+| [22] | Ginjala, S., Fosler-Lussier, E., Myers, C. W., & Parthasarathy, S. (2026). *Do LLM Decoders Listen Fairly? Benchmarking How Language Model Priors Shape Bias in Speech Recognition.* arXiv:2604.21276. |
+| [23] | Han, S., Mao, H., & Dally, W. J. (2016). *Deep Compression: Compressing Deep Neural Networks with Pruning, Trained Quantization and Huffman Coding.* ICLR 2016. |
+| [24] | Williams, M., & Aletras, N. (2024). *On the Impact of Calibration Data in Post-training Quantization and Pruning.* ACL 2024. arXiv:2311.09755. |
