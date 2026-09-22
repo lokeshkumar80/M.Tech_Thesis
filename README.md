@@ -1742,80 +1742,96 @@ Pruned models are still stored as dense FP16 (0.450 GB for Small, 1.423 GB for M
 
 ---
 
+
 ### ✅ Week 15 | Combined Pruning + Quantization
 
 **Protocol:** Wanda pruning (per-output-row, calibrated on 256 samples from `data/filtered/train`) applied first, followed by post-training quantization on the pruned model. Same corrected pipeline evaluation as all prior weeks. Script: `24_combined_pruning_quantization.py`.
 
-**Scope:** 5 quantization methods (`int8_naive`, `fp8_naive`, `fp4_naive`, `bnb_fp4`, `bnb_nf4`) × 6 sparsity levels (10%, 20%, 30%, 40%, 45%, 50%) × 6 variants = 180 combinations, all complete. Originally run at 3 methods × 5 sparsity levels × 3 variants (45 combinations) then extended with `int8_naive`, `bnb_nf4`, and the 50% sparsity point (Phase 1, bringing the original three variants to 90 combinations), then extended again to Tiny-EN-ours, Tiny-EN-Dutta, and Base-EN-ours (Phase 2, the remaining 90). `int4_pct` deliberately deferred from this round (see script docstring) to keep scope bounded; remains available as a follow-up.
+**Scope:** The paper subset now contains **168 completed configurations**: four English-only fine-tuned checkpoints (Tiny-EN-ours, Base-EN-ours, Small-EN, Medium-EN) × seven methods (`int8_naive`, `fp8_naive`, `int4_naive`, `fp4_naive`, `bnb_int8`, `bnb_fp4`, `bnb_nf4`) × six sparsities (10%, 20%, 30%, 40%, 45%, 50%). Adding `int4_naive` and `bnb_int8` contributes 48 runs to the previous 120-run paper subset. The broader Week 15 archive retains the original 30 runs each for Tiny-EN-Dutta and Small-multilingual: **228 runs total = 180 original + 48 added = 168 paper subset + 60 other runs**. No new INT4/BnB-INT8 results were supplied for those two other checkpoints. `int4_pct` remains deferred.
 
 **Note on `bnb_nf4`'s theoretical size column:** an implementation gap meant `bnb_nf4` was missing from the script's `NOMINAL_BITS` lookup when it was added as a new method, causing its theoretical-size calculation to silently default to 8 bits instead of its real 4 bits (confirmed by the raw script output showing `bnb_nf4`'s theoretical size identical to `int8_naive`/`fp8_naive` rather than matching `bnb_fp4`, which shares the same true 4-bit packed format). The theoretical values shown below are corrected post-hoc using the same formula with the right bit-width for both Phase 1 and Phase 2 results; the underlying WER, RTF, and actual-size measurements were never affected by this bug. The fix is in place in the script for all future runs. A related gap meant `FP16_BASELINE` and `WANDA_ONLY_REF` were entirely missing entries for the three Phase 2 checkpoints, leaving `wer_delta_vs_fp16`/`wer_delta_vs_wanda_only` null in their JSON files - also fixed in the script for future runs, with the values shown below recomputed from the same reference data already established in Weeks 8-10 and 11-14.
 
 **Order of operations:** prune first, then quantize - not the reverse. Pruning's importance ranking needs full FP16 precision to be meaningful; quantizing first would collapse weights onto a coarse grid before pruning could distinguish them. Zero always quantizes to zero in every scheme used here, so pruned entries stay exactly zero through quantization with no interaction to worry about on that front.
 
-#### Tiny-EN-ours Complete (30/30) - Five Methods × Six Sparsity Levels
+#### Tiny-EN-ours Complete (42/42) - Seven Methods × Six Sparsity Levels
 
 **Tiny-EN-ours** (FP16 baseline: 14.53%)
 
-| Sparsity | Method | WER% | ΔFP16 | ΔWandaOnly | Actual (MB) | Theor.Comb (MB) | RTF |
-|---|---|---|---|---|---|---|---|
-| 10% | INT8 | 14.40% | -0.13% | -0.33% | 75.4 | 38.2 | 0.0090 |
-| 10% | FP8 | 14.66% | +0.13% | -0.07% | 75.4 | 38.2 | 0.0091 |
-| 10% | FP4 | 31.86% | +17.33% | +17.13% | 75.4 | 22.5 | 0.0126 |
-| 10% | BnBFP4 | 20.98% | +6.45% | +6.25% | 48.4 | 22.5 | 0.0091 |
-| 10% | BnBNF4 | 16.46% | +1.93% | +1.73% | 48.4 | 22.5 | 0.0092 |
-| 10% | *Wanda-only ref* | *14.73%* | — | — | — | — | — |
-| 20% | INT8 | 14.12% | -0.41% | -0.04% | 75.4 | 34.7 | 0.0089 |
-| 20% | FP8 | 14.83% | +0.30% | +0.67% | 75.4 | 34.7 | 0.0090 |
-| 20% | FP4 | 33.57% | +19.04% | +19.41% | 75.4 | 20.8 | 0.0128 |
-| 20% | BnBFP4 | 20.28% | +5.75% | +6.12% | 48.4 | 20.8 | 0.0090 |
-| 20% | BnBNF4 | 17.46% | +2.93% | +3.30% | 48.4 | 20.8 | 0.0092 |
-| 20% | *Wanda-only ref* | *14.16%* | — | — | — | — | — |
-| 30% | INT8 | 15.04% | +0.51% | -0.03% | 75.4 | 31.2 | 0.0088 |
-| 30% | FP8 | 15.01% | +0.48% | -0.06% | 75.4 | 31.2 | 0.0088 |
-| 30% | FP4 | 33.98% | +19.45% | +18.91% | 75.4 | 19.0 | 0.0121 |
-| 30% | BnBFP4 | 22.18% | +7.65% | +7.11% | 48.4 | 19.0 | 0.0089 |
-| 30% | BnBNF4 | 16.64% | +2.11% | +1.57% | 48.4 | 19.0 | 0.0088 |
-| 30% | *Wanda-only ref* | *15.07%* | — | — | — | — | — |
-| 40% | INT8 | 22.01% | +7.48% | -0.55% | 75.4 | 27.8 | 0.0093 |
-| 40% | FP8 | 23.28% | +8.75% | +0.72% | 75.4 | 27.8 | 0.0094 |
-| 40% | FP4 | 65.83% | +51.30% | +43.27% | 75.4 | 17.3 | 0.0165 |
-| 40% | BnBFP4 | 37.06% | +22.53% | +14.50% | 48.4 | 17.3 | 0.0098 |
-| 40% | BnBNF4 | 30.14% | +15.61% | +7.58% | 48.4 | 17.3 | 0.0100 |
-| 40% | *Wanda-only ref* | *22.56%* | — | — | — | — | — |
-| 45% | INT8 | 36.93% | +22.40% | +0.18% | 75.4 | 26.0 | 0.0109 |
-| 45% | FP8 | 38.90% | +24.37% | +2.15% | 75.4 | 26.0 | 0.0113 |
-| 45% | FP4 | 111.75% | +97.22% | +75.00% | 75.4 | 16.5 | 0.0220 |
-| 45% | BnBFP4 | 65.81% | +51.28% | +29.06% | 48.4 | 16.5 | 0.0125 |
-| 45% | BnBNF4 | 56.90% | +42.37% | +20.15% | 48.4 | 16.5 | 0.0129 |
-| 45% | *Wanda-only ref* | *36.75%* | — | — | — | — | — |
-| 50% | INT8 | 113.37% | +98.84% | -0.75% | 75.4 | 24.3 | 0.0171 |
-| 50% | FP8 | 122.35% | +107.82% | +8.23% | 75.4 | 24.3 | 0.0172 |
-| 50% | FP4 | 270.91% | +256.38% | +156.79% | 75.4 | 15.6 | 0.0338 |
-| 50% | BnBFP4 | 267.53% | +253.00% | +153.41% | 48.4 | 15.6 | 0.0256 |
-| 50% | BnBNF4 | 208.30% | +193.77% | +94.18% | 48.4 | 15.6 | 0.0227 |
-| 50% | *Wanda-only ref* | *114.12%* | — | — | — | — | — |
+BnBINT8 denotes `bnb_int8`; INT4 denotes `int4_naive`. Added runs include quantization-only theoretical size and total time; `—` means not supplied for the earlier runs. Delta columns are absolute percentage points.
+
+| Sparsity | Method | WER% | ΔFP16 | ΔWandaOnly | Actual (MB) | Theor.Comb (MB) | RTF | Theor. Quant (MB) | Total Time (min) |
+|---|---|---|---|---|---|---|---|---|---|
+| 0% | **FP16 baseline** | 14.53% | 0.00 pp | — | — | — | — | — | — |
+| 10% | INT8 | 14.40% | -0.13 pp | -0.33 pp | 75.4 | 38.2 | 0.0090 | — | — |
+| 10% | FP8 | 14.66% | +0.13 pp | -0.07 pp | 75.4 | 38.2 | 0.0091 | — | — |
+| 10% | FP4 | 31.86% | +17.33 pp | +17.13 pp | 75.4 | 22.5 | 0.0126 | — | — |
+| 10% | BnBFP4 | 20.98% | +6.45 pp | +6.25 pp | 48.4 | 22.5 | 0.0091 | — | — |
+| 10% | BnBNF4 | 16.46% | +1.93 pp | +1.73 pp | 48.4 | 22.5 | 0.0092 | — | — |
+| 10% | BnBINT8 | 14.33% | -0.20 pp | -0.40 pp | 56.3 | 38.2 | 0.0156 | 37.3 | 31.0 |
+| 10% | INT4 | 616.05% | +601.52 pp | +601.32 pp | 75.4 | 22.5 | 0.0341 | 19.9 | 67.7 |
+| 10% | *Wanda-only ref* | *14.73%* | — | — | — | — | — | — | — |
+| 20% | INT8 | 14.12% | -0.41 pp | -0.04 pp | 75.4 | 34.7 | 0.0089 | — | — |
+| 20% | FP8 | 14.83% | +0.30 pp | +0.67 pp | 75.4 | 34.7 | 0.0090 | — | — |
+| 20% | FP4 | 33.57% | +19.04 pp | +19.41 pp | 75.4 | 20.8 | 0.0128 | — | — |
+| 20% | BnBFP4 | 20.28% | +5.75 pp | +6.12 pp | 48.4 | 20.8 | 0.0090 | — | — |
+| 20% | BnBNF4 | 17.46% | +2.93 pp | +3.30 pp | 48.4 | 20.8 | 0.0092 | — | — |
+| 20% | BnBINT8 | 14.14% | -0.39 pp | -0.02 pp | 56.3 | 34.7 | 0.0163 | 37.3 | 32.5 |
+| 20% | INT4 | 643.22% | +628.69 pp | +629.06 pp | 75.4 | 20.8 | 0.0339 | 19.9 | 67.5 |
+| 20% | *Wanda-only ref* | *14.16%* | — | — | — | — | — | — | — |
+| 30% | INT8 | 15.04% | +0.51 pp | -0.03 pp | 75.4 | 31.2 | 0.0088 | — | — |
+| 30% | FP8 | 15.01% | +0.48 pp | -0.06 pp | 75.4 | 31.2 | 0.0088 | — | — |
+| 30% | FP4 | 33.98% | +19.45 pp | +18.91 pp | 75.4 | 19.0 | 0.0121 | — | — |
+| 30% | BnBFP4 | 22.18% | +7.65 pp | +7.11 pp | 48.4 | 19.0 | 0.0089 | — | — |
+| 30% | BnBNF4 | 16.64% | +2.11 pp | +1.57 pp | 48.4 | 19.0 | 0.0088 | — | — |
+| 30% | BnBINT8 | 15.34% | +0.81 pp | +0.27 pp | 56.3 | 31.2 | 0.0153 | 37.3 | 30.5 |
+| 30% | INT4 | 584.70% | +570.17 pp | +569.63 pp | 75.4 | 19.0 | 0.0340 | 19.9 | 67.5 |
+| 30% | *Wanda-only ref* | *15.07%* | — | — | — | — | — | — | — |
+| 40% | INT8 | 22.01% | +7.48 pp | -0.55 pp | 75.4 | 27.8 | 0.0093 | — | — |
+| 40% | FP8 | 23.28% | +8.75 pp | +0.72 pp | 75.4 | 27.8 | 0.0094 | — | — |
+| 40% | FP4 | 65.83% | +51.30 pp | +43.27 pp | 75.4 | 17.3 | 0.0165 | — | — |
+| 40% | BnBFP4 | 37.06% | +22.53 pp | +14.50 pp | 48.4 | 17.3 | 0.0098 | — | — |
+| 40% | BnBNF4 | 30.14% | +15.61 pp | +7.58 pp | 48.4 | 17.3 | 0.0100 | — | — |
+| 40% | BnBINT8 | 22.44% | +7.91 pp | -0.12 pp | 56.3 | 27.8 | 0.0158 | 37.3 | 31.5 |
+| 40% | INT4 | 682.91% | +668.38 pp | +660.35 pp | 75.4 | 17.3 | 0.0337 | 19.9 | 66.9 |
+| 40% | *Wanda-only ref* | *22.56%* | — | — | — | — | — | — | — |
+| 45% | INT8 | 36.93% | +22.40 pp | +0.18 pp | 75.4 | 26.0 | 0.0109 | — | — |
+| 45% | FP8 | 38.90% | +24.37 pp | +2.15 pp | 75.4 | 26.0 | 0.0113 | — | — |
+| 45% | FP4 | 111.75% | +97.22 pp | +75.00 pp | 75.4 | 16.5 | 0.0220 | — | — |
+| 45% | BnBFP4 | 65.81% | +51.28 pp | +29.06 pp | 48.4 | 16.5 | 0.0125 | — | — |
+| 45% | BnBNF4 | 56.90% | +42.37 pp | +20.15 pp | 48.4 | 16.5 | 0.0129 | — | — |
+| 45% | BnBINT8 | 35.95% | +21.42 pp | -0.80 pp | 56.3 | 26.0 | 0.0184 | 37.3 | 36.6 |
+| 45% | INT4 | 685.64% | +671.11 pp | +648.89 pp | 75.4 | 16.5 | 0.0333 | 19.9 | 66.2 |
+| 45% | *Wanda-only ref* | *36.75%* | — | — | — | — | — | — | — |
+| 50% | INT8 | 113.37% | +98.84 pp | -0.75 pp | 75.4 | 24.3 | 0.0171 | — | — |
+| 50% | FP8 | 122.35% | +107.82 pp | +8.23 pp | 75.4 | 24.3 | 0.0172 | — | — |
+| 50% | FP4 | 270.91% | +256.38 pp | +156.79 pp | 75.4 | 15.6 | 0.0338 | — | — |
+| 50% | BnBFP4 | 267.53% | +253.00 pp | +153.41 pp | 48.4 | 15.6 | 0.0256 | — | — |
+| 50% | BnBNF4 | 208.30% | +193.77 pp | +94.18 pp | 48.4 | 15.6 | 0.0227 | — | — |
+| 50% | BnBINT8 | 115.87% | +101.34 pp | +1.75 pp | 56.3 | 24.3 | 0.0323 | 37.3 | 64.2 |
+| 50% | INT4 | 764.34% | +749.81 pp | +650.22 pp | 75.4 | 15.6 | 0.0359 | 19.9 | 71.3 |
+| 50% | *Wanda-only ref* | *114.12%* | — | — | — | — | — | — | — |
 
 *Interaction pivot: Δ vs Wanda-only (synergy/neutral/compound signal)*
 
-| Sparsity | INT8 | FP8 | FP4 | BnBFP4 | BnBNF4 |
-|---|---|---|---|---|---|
-| 10% | -0.33 | -0.07 | +17.13 | +6.25 | +1.73 |
-| 20% | -0.04 | +0.67 | +19.41 | +6.12 | +3.30 |
-| 30% | -0.03 | -0.06 | +18.91 | +7.11 | +1.57 |
-| 40% | -0.55 | +0.72 | +43.27 | +14.50 | +7.58 |
-| 45% | +0.18 | +2.15 | +75.00 | +29.06 | +20.15 |
-| 50% | -0.75 | +8.23 | +156.79 | +153.41 | +94.18 |
+| Sparsity | INT8 | FP8 | FP4 | BnBFP4 | BnBNF4 | BnBINT8 | INT4 |
+|---|---|---|---|---|---|---|---|
+| 10% | -0.33 | -0.07 | +17.13 | +6.25 | +1.73 | -0.40 | +601.32 |
+| 20% | -0.04 | +0.67 | +19.41 | +6.12 | +3.30 | -0.02 | +629.06 |
+| 30% | -0.03 | -0.06 | +18.91 | +7.11 | +1.57 | +0.27 | +569.63 |
+| 40% | -0.55 | +0.72 | +43.27 | +14.50 | +7.58 | -0.12 | +660.35 |
+| 45% | +0.18 | +2.15 | +75.00 | +29.06 | +20.15 | -0.80 | +648.89 |
+| 50% | -0.75 | +8.23 | +156.79 | +153.41 | +94.18 | +1.75 | +650.22 |
 
 *Classified:*
 
-| Sparsity | INT8 | FP8 | FP4 | BnBFP4 | BnBNF4 |
-|---|---|---|---|---|---|
-| 10% | Mild synergy | Mild synergy | Moderate compound | Moderate compound | Neutral |
-| 20% | Mild synergy | Neutral | Moderate compound | Moderate compound | Moderate compound |
-| 30% | Mild synergy | Mild synergy | Moderate compound | Moderate compound | Neutral |
-| 40% | Mild synergy | Neutral | SEVERE compound | Moderate compound | Moderate compound |
-| 45% | Neutral | Moderate compound | SEVERE compound | SEVERE compound | SEVERE compound |
-| 50% | Mild synergy | Moderate compound | SEVERE compound | SEVERE compound | SEVERE compound |
+| Sparsity | INT8 | FP8 | FP4 | BnBFP4 | BnBNF4 | BnBINT8 | INT4 |
+|---|---|---|---|---|---|---|---|
+| 10% | Mild synergy | Mild synergy | Moderate compound | Moderate compound | Neutral | Mild synergy | SEVERE compound |
+| 20% | Mild synergy | Neutral | Moderate compound | Moderate compound | Moderate compound | Mild synergy | SEVERE compound |
+| 30% | Mild synergy | Mild synergy | Moderate compound | Moderate compound | Neutral | Neutral | SEVERE compound |
+| 40% | Mild synergy | Neutral | SEVERE compound | Moderate compound | Moderate compound | Mild synergy | SEVERE compound |
+| 45% | Neutral | Moderate compound | SEVERE compound | SEVERE compound | SEVERE compound | Mild synergy | SEVERE compound |
+| 50% | Mild synergy | Moderate compound | SEVERE compound | SEVERE compound | SEVERE compound | Neutral | SEVERE compound |
 
 #### Tiny-EN-Dutta Complete (30/30) - Five Methods × Six Sparsity Levels
 
@@ -1882,135 +1898,167 @@ Pruned models are still stored as dense FP16 (0.450 GB for Small, 1.423 GB for M
 | 45% | Strong synergy | Strong synergy | SEVERE compound | SEVERE compound | SEVERE compound |
 | 50% | Strong synergy | Strong synergy | SEVERE compound | SEVERE compound | SEVERE compound |
 
-#### Base-EN-ours Complete (30/30) - Five Methods × Six Sparsity Levels
+#### Base-EN-ours Complete (42/42) - Seven Methods × Six Sparsity Levels
 
 **Base-EN-ours** (FP16 baseline: 11.91%)
 
-| Sparsity | Method | WER% | ΔFP16 | ΔWandaOnly | Actual (MB) | Theor.Comb (MB) | RTF |
-|---|---|---|---|---|---|---|---|
-| 10% | INT8 | 11.57% | -0.34% | -0.05% | 122.0 | 72.8 | 0.0131 |
-| 10% | FP8 | 11.93% | +0.02% | +0.31% | 122.0 | 72.8 | 0.0133 |
-| 10% | FP4 | 44.24% | +32.33% | +32.62% | 122.0 | 42.5 | 0.0269 |
-| 10% | BnBFP4 | 15.37% | +3.46% | +3.75% | 75.5 | 42.5 | 0.0132 |
-| 10% | BnBNF4 | 12.75% | +0.84% | +1.13% | 75.5 | 42.5 | 0.0125 |
-| 10% | *Wanda-only ref* | *11.62%* | — | — | — | — | — |
-| 20% | INT8 | 11.68% | -0.23% | -0.13% | 122.0 | 66.2 | 0.0130 |
-| 20% | FP8 | 11.94% | +0.03% | +0.13% | 122.0 | 66.2 | 0.0132 |
-| 20% | FP4 | 37.48% | +25.57% | +25.67% | 122.0 | 39.2 | 0.0246 |
-| 20% | BnBFP4 | 15.26% | +3.35% | +3.45% | 75.5 | 39.2 | 0.0129 |
-| 20% | BnBNF4 | 12.33% | +0.42% | +0.52% | 75.5 | 39.2 | 0.0123 |
-| 20% | *Wanda-only ref* | *11.81%* | — | — | — | — | — |
-| 30% | INT8 | 12.69% | +0.78% | +0.20% | 122.0 | 59.4 | 0.0133 |
-| 30% | FP8 | 12.49% | +0.58% | +0.00% | 122.0 | 59.4 | 0.0132 |
-| 30% | FP4 | 35.75% | +23.84% | +23.26% | 122.0 | 35.8 | 0.0261 |
-| 30% | BnBFP4 | 16.56% | +4.65% | +4.07% | 75.5 | 35.8 | 0.0134 |
-| 30% | BnBNF4 | 13.51% | +1.60% | +1.02% | 75.5 | 35.8 | 0.0127 |
-| 30% | *Wanda-only ref* | *12.49%* | — | — | — | — | — |
-| 40% | INT8 | 14.36% | +2.45% | -0.26% | 122.0 | 52.7 | 0.0135 |
-| 40% | FP8 | 14.41% | +2.50% | -0.21% | 122.0 | 52.7 | 0.0135 |
-| 40% | FP4 | 55.26% | +43.35% | +40.64% | 122.0 | 32.5 | 0.0270 |
-| 40% | BnBFP4 | 22.69% | +10.78% | +8.07% | 75.5 | 32.5 | 0.0138 |
-| 40% | BnBNF4 | 17.44% | +5.53% | +2.82% | 75.5 | 32.5 | 0.0130 |
-| 40% | *Wanda-only ref* | *14.62%* | — | — | — | — | — |
-| 45% | INT8 | 18.31% | +6.40% | -0.02% | 122.0 | 49.3 | 0.0134 |
-| 45% | FP8 | 17.86% | +5.95% | -0.47% | 122.0 | 49.3 | 0.0135 |
-| 45% | FP4 | 52.22% | +40.31% | +33.89% | 122.0 | 30.7 | 0.0295 |
-| 45% | BnBFP4 | 30.51% | +18.60% | +12.18% | 75.5 | 30.7 | 0.0134 |
-| 45% | BnBNF4 | 22.77% | +10.86% | +4.44% | 75.5 | 30.7 | 0.0128 |
-| 45% | *Wanda-only ref* | *18.33%* | — | — | — | — | — |
-| 50% | INT8 | 26.60% | +14.69% | -0.05% | 122.0 | 45.9 | 0.0134 |
-| 50% | FP8 | 25.44% | +13.53% | -1.21% | 122.0 | 45.9 | 0.0134 |
-| 50% | FP4 | 118.52% | +106.61% | +91.87% | 122.0 | 29.1 | 0.0400 |
-| 50% | BnBFP4 | 51.30% | +39.39% | +24.65% | 75.5 | 29.1 | 0.0143 |
-| 50% | BnBNF4 | 40.79% | +28.88% | +14.14% | 75.5 | 29.1 | 0.0137 |
-| 50% | *Wanda-only ref* | *26.65%* | — | — | — | — | — |
+BnBINT8 denotes `bnb_int8`; INT4 denotes `int4_naive`. Added runs include quantization-only theoretical size and total time; `—` means not supplied for the earlier runs. Delta columns are absolute percentage points.
+
+| Sparsity | Method | WER% | ΔFP16 | ΔWandaOnly | Actual (MB) | Theor.Comb (MB) | RTF | Theor. Quant (MB) | Total Time (min) |
+|---|---|---|---|---|---|---|---|---|---|
+| 0% | **FP16 baseline** | 11.91% | 0.00 pp | — | — | — | — | — | — |
+| 10% | INT8 | 11.57% | -0.34 pp | -0.05 pp | 122.0 | 72.8 | 0.0131 | — | — |
+| 10% | FP8 | 11.93% | +0.02 pp | +0.31 pp | 122.0 | 72.8 | 0.0133 | — | — |
+| 10% | FP4 | 44.24% | +32.33 pp | +32.62 pp | 122.0 | 42.5 | 0.0269 | — | — |
+| 10% | BnBFP4 | 15.37% | +3.46 pp | +3.75 pp | 75.5 | 42.5 | 0.0132 | — | — |
+| 10% | BnBNF4 | 12.75% | +0.84 pp | +1.13 pp | 75.5 | 42.5 | 0.0125 | — | — |
+| 10% | BnBINT8 | 11.61% | -0.30 pp | -0.01 pp | 96.5 | 72.8 | 0.0239 | 71.2 | 47.5 |
+| 10% | INT4 | 578.72% | +566.81 pp | +567.10 pp | 122.0 | 42.5 | 0.0549 | 37.5 | 109.2 |
+| 10% | *Wanda-only ref* | *11.62%* | — | — | — | — | — | — | — |
+| 20% | INT8 | 11.68% | -0.23 pp | -0.13 pp | 122.0 | 66.2 | 0.0130 | — | — |
+| 20% | FP8 | 11.94% | +0.03 pp | +0.13 pp | 122.0 | 66.2 | 0.0132 | — | — |
+| 20% | FP4 | 37.48% | +25.57 pp | +25.67 pp | 122.0 | 39.2 | 0.0246 | — | — |
+| 20% | BnBFP4 | 15.26% | +3.35 pp | +3.45 pp | 75.5 | 39.2 | 0.0129 | — | — |
+| 20% | BnBNF4 | 12.33% | +0.42 pp | +0.52 pp | 75.5 | 39.2 | 0.0123 | — | — |
+| 20% | BnBINT8 | 12.01% | +0.10 pp | +0.20 pp | 96.5 | 66.2 | 0.0223 | 71.2 | 44.4 |
+| 20% | INT4 | 576.07% | +564.16 pp | +564.26 pp | 122.0 | 39.2 | 0.0538 | 37.5 | 106.8 |
+| 20% | *Wanda-only ref* | *11.81%* | — | — | — | — | — | — | — |
+| 30% | INT8 | 12.69% | +0.78 pp | +0.20 pp | 122.0 | 59.4 | 0.0133 | — | — |
+| 30% | FP8 | 12.49% | +0.58 pp | +0.00 pp | 122.0 | 59.4 | 0.0132 | — | — |
+| 30% | FP4 | 35.75% | +23.84 pp | +23.26 pp | 122.0 | 35.8 | 0.0261 | — | — |
+| 30% | BnBFP4 | 16.56% | +4.65 pp | +4.07 pp | 75.5 | 35.8 | 0.0134 | — | — |
+| 30% | BnBNF4 | 13.51% | +1.60 pp | +1.02 pp | 75.5 | 35.8 | 0.0127 | — | — |
+| 30% | BnBINT8 | 12.47% | +0.56 pp | -0.02 pp | 96.5 | 59.4 | 0.0227 | 71.2 | 45.1 |
+| 30% | INT4 | 572.19% | +560.28 pp | +559.70 pp | 122.0 | 35.8 | 0.0527 | 37.5 | 104.8 |
+| 30% | *Wanda-only ref* | *12.49%* | — | — | — | — | — | — | — |
+| 40% | INT8 | 14.36% | +2.45 pp | -0.26 pp | 122.0 | 52.7 | 0.0135 | — | — |
+| 40% | FP8 | 14.41% | +2.50 pp | -0.21 pp | 122.0 | 52.7 | 0.0135 | — | — |
+| 40% | FP4 | 55.26% | +43.35 pp | +40.64 pp | 122.0 | 32.5 | 0.0270 | — | — |
+| 40% | BnBFP4 | 22.69% | +10.78 pp | +8.07 pp | 75.5 | 32.5 | 0.0138 | — | — |
+| 40% | BnBNF4 | 17.44% | +5.53 pp | +2.82 pp | 75.5 | 32.5 | 0.0130 | — | — |
+| 40% | BnBINT8 | 14.54% | +2.63 pp | -0.08 pp | 96.5 | 52.7 | 0.0229 | 71.2 | 45.5 |
+| 40% | INT4 | 584.04% | +572.13 pp | +569.42 pp | 122.0 | 32.5 | 0.0524 | 37.5 | 104.2 |
+| 40% | *Wanda-only ref* | *14.62%* | — | — | — | — | — | — | — |
+| 45% | INT8 | 18.31% | +6.40 pp | -0.02 pp | 122.0 | 49.3 | 0.0134 | — | — |
+| 45% | FP8 | 17.86% | +5.95 pp | -0.47 pp | 122.0 | 49.3 | 0.0135 | — | — |
+| 45% | FP4 | 52.22% | +40.31 pp | +33.89 pp | 122.0 | 30.7 | 0.0295 | — | — |
+| 45% | BnBFP4 | 30.51% | +18.60 pp | +12.18 pp | 75.5 | 30.7 | 0.0134 | — | — |
+| 45% | BnBNF4 | 22.77% | +10.86 pp | +4.44 pp | 75.5 | 30.7 | 0.0128 | — | — |
+| 45% | BnBINT8 | 18.66% | +6.75 pp | +0.33 pp | 96.5 | 49.3 | 0.0231 | 71.2 | 46.0 |
+| 45% | INT4 | 483.27% | +471.36 pp | +464.94 pp | 122.0 | 30.7 | 0.0513 | 37.5 | 101.9 |
+| 45% | *Wanda-only ref* | *18.33%* | — | — | — | — | — | — | — |
+| 50% | INT8 | 26.60% | +14.69 pp | -0.05 pp | 122.0 | 45.9 | 0.0134 | — | — |
+| 50% | FP8 | 25.44% | +13.53 pp | -1.21 pp | 122.0 | 45.9 | 0.0134 | — | — |
+| 50% | FP4 | 118.52% | +106.61 pp | +91.87 pp | 122.0 | 29.1 | 0.0400 | — | — |
+| 50% | BnBFP4 | 51.30% | +39.39 pp | +24.65 pp | 75.5 | 29.1 | 0.0143 | — | — |
+| 50% | BnBNF4 | 40.79% | +28.88 pp | +14.14 pp | 75.5 | 29.1 | 0.0137 | — | — |
+| 50% | BnBINT8 | 28.15% | +16.24 pp | +1.50 pp | 96.5 | 45.9 | 0.0226 | 71.2 | 44.9 |
+| 50% | INT4 | 427.81% | +415.90 pp | +401.16 pp | 122.0 | 29.1 | 0.0485 | 37.5 | 96.4 |
+| 50% | *Wanda-only ref* | *26.65%* | — | — | — | — | — | — | — |
 
 *Interaction pivot: Δ vs Wanda-only (synergy/neutral/compound signal)*
 
-| Sparsity | INT8 | FP8 | FP4 | BnBFP4 | BnBNF4 |
-|---|---|---|---|---|---|
-| 10% | -0.05 | +0.31 | +32.62 | +3.75 | +1.13 |
-| 20% | -0.13 | +0.13 | +25.67 | +3.45 | +0.52 |
-| 30% | +0.20 | +0.00 | +23.26 | +4.07 | +1.02 |
-| 40% | -0.26 | -0.21 | +40.64 | +8.07 | +2.82 |
-| 45% | -0.02 | -0.47 | +33.89 | +12.18 | +4.44 |
-| 50% | -0.05 | -1.21 | +91.87 | +24.65 | +14.14 |
+| Sparsity | INT8 | FP8 | FP4 | BnBFP4 | BnBNF4 | BnBINT8 | INT4 |
+|---|---|---|---|---|---|---|---|
+| 10% | -0.05 | +0.31 | +32.62 | +3.75 | +1.13 | -0.01 | +567.10 |
+| 20% | -0.13 | +0.13 | +25.67 | +3.45 | +0.52 | +0.20 | +564.26 |
+| 30% | +0.20 | +0.00 | +23.26 | +4.07 | +1.02 | -0.02 | +559.70 |
+| 40% | -0.26 | -0.21 | +40.64 | +8.07 | +2.82 | -0.08 | +569.42 |
+| 45% | -0.02 | -0.47 | +33.89 | +12.18 | +4.44 | +0.33 | +464.94 |
+| 50% | -0.05 | -1.21 | +91.87 | +24.65 | +14.14 | +1.50 | +401.16 |
 
 *Classified:*
 
-| Sparsity | INT8 | FP8 | FP4 | BnBFP4 | BnBNF4 |
-|---|---|---|---|---|---|
-| 10% | Mild synergy | Neutral | SEVERE compound | Moderate compound | Neutral |
-| 20% | Mild synergy | Neutral | SEVERE compound | Moderate compound | Neutral |
-| 30% | Neutral | Neutral | SEVERE compound | Moderate compound | Neutral |
-| 40% | Mild synergy | Mild synergy | SEVERE compound | Moderate compound | Moderate compound |
-| 45% | Mild synergy | Mild synergy | SEVERE compound | Moderate compound | Moderate compound |
-| 50% | Mild synergy | Strong synergy | SEVERE compound | SEVERE compound | Moderate compound |
+| Sparsity | INT8 | FP8 | FP4 | BnBFP4 | BnBNF4 | BnBINT8 | INT4 |
+|---|---|---|---|---|---|---|---|
+| 10% | Mild synergy | Neutral | SEVERE compound | Moderate compound | Neutral | Mild synergy | SEVERE compound |
+| 20% | Mild synergy | Neutral | SEVERE compound | Moderate compound | Neutral | Neutral | SEVERE compound |
+| 30% | Neutral | Neutral | SEVERE compound | Moderate compound | Neutral | Mild synergy | SEVERE compound |
+| 40% | Mild synergy | Mild synergy | SEVERE compound | Moderate compound | Moderate compound | Mild synergy | SEVERE compound |
+| 45% | Mild synergy | Mild synergy | SEVERE compound | Moderate compound | Moderate compound | Neutral | SEVERE compound |
+| 50% | Mild synergy | Strong synergy | SEVERE compound | SEVERE compound | Moderate compound | Neutral | SEVERE compound |
 
-#### Small-EN Complete (30/30) - Five Methods × Six Sparsity Levels
+#### Small-EN Complete (42/42) - Seven Methods × Six Sparsity Levels
 
 **Small-EN** (FP16 baseline: 9.16%)
 
-| Sparsity | Method | WER% | ΔFP16 | ΔWandaOnly | Actual (MB) | Theor.Comb (MB) | RTF |
-|---|---|---|---|---|---|---|---|
-| 10% | INT8 | 9.06% | -0.10% | -0.22% | 310.5 | 239.8 | 0.0196 |
-| 10% | FP8 | 9.24% | +0.08% | -0.04% | 310.6 | 239.8 | 0.0198 |
-| 10% | FP4 | 12.39% | +3.23% | +3.11% | 310.6 | 137.6 | 0.0248 |
-| 10% | BnBFP4 | 9.75% | +0.59% | +0.47% | 177.6 | 137.6 | 0.0194 |
-| 10% | BnBNF4 | 9.18% | +0.02% | -0.10% | 177.6 | 137.6 | 0.0186 |
-| 10% | *Wanda-only ref* | *9.28%* | — | — | — | — | — |
-| 20% | INT8 | 9.36% | +0.20% | -0.22% | 310.5 | 217.2 | 0.0196 |
-| 20% | FP8 | 9.45% | +0.29% | -0.13% | 310.6 | 217.2 | 0.0197 |
-| 20% | FP4 | 12.77% | +3.61% | +3.19% | 310.6 | 126.3 | 0.0255 |
-| 20% | BnBFP4 | 9.71% | +0.55% | +0.13% | 177.6 | 126.3 | 0.0193 |
-| 20% | BnBNF4 | 9.79% | +0.63% | +0.21% | 177.6 | 126.3 | 0.0186 |
-| 20% | *Wanda-only ref* | *9.58%* | — | — | — | — | — |
-| 30% | INT8 | 9.89% | +0.73% | -0.39% | 310.5 | 194.5 | 0.0199 |
-| 30% | FP8 | 9.82% | +0.66% | -0.46% | 310.6 | 194.5 | 0.0209 |
-| 30% | FP4 | 12.68% | +3.52% | +2.40% | 310.6 | 115.0 | 0.0251 |
-| 30% | BnBFP4 | 9.87% | +0.71% | -0.41% | 177.6 | 115.0 | 0.0189 |
-| 30% | BnBNF4 | 9.79% | +0.63% | -0.49% | 177.6 | 114.9 | 0.0187 |
-| 30% | *Wanda-only ref* | *10.28%* | — | — | — | — | — |
-| 40% | INT8 | 9.94% | +0.78% | -0.18% | 310.5 | 171.7 | 0.0199 |
-| 40% | FP8 | 9.93% | +0.77% | -0.19% | 310.6 | 171.7 | 0.0204 |
-| 40% | FP4 | 13.85% | +4.69% | +3.73% | 310.6 | 103.6 | 0.0258 |
-| 40% | BnBFP4 | 10.74% | +1.58% | +0.62% | 177.6 | 103.6 | 0.0195 |
-| 40% | BnBNF4 | 10.23% | +1.07% | +0.11% | 177.6 | 103.6 | 0.0186 |
-| 40% | *Wanda-only ref* | *10.12%* | — | — | — | — | — |
-| 45% | INT8 | 10.33% | +1.17% | -0.08% | 310.5 | 160.5 | 0.0198 |
-| 45% | FP8 | 10.63% | +1.47% | +0.22% | 310.6 | 160.5 | 0.0208 |
-| 45% | FP4 | 15.42% | +6.26% | +5.01% | 310.6 | 98.0 | 0.0257 |
-| 45% | BnBFP4 | 11.62% | +2.46% | +1.21% | 177.6 | 98.0 | 0.0188 |
-| 45% | BnBNF4 | 10.74% | +1.58% | +0.33% | 177.6 | 97.9 | 0.0184 |
-| 45% | *Wanda-only ref* | *10.41%* | — | — | — | — | — |
-| 50% | INT8 | 11.96% | +2.80% | -0.05% | 310.5 | 148.9 | 0.0198 |
-| 50% | FP8 | 12.05% | +2.89% | +0.04% | 310.5 | 148.9 | 0.0202 |
-| 50% | FP4 | 17.45% | +8.29% | +5.44% | 310.5 | 92.2 | 0.0250 |
-| 50% | BnBFP4 | 12.66% | +3.50% | +0.65% | 177.6 | 92.2 | 0.0190 |
-| 50% | BnBNF4 | 12.44% | +3.28% | +0.43% | 177.6 | 92.2 | 0.0185 |
-| 50% | *Wanda-only ref* | *12.01%* | — | — | — | — | — |
+Paper WER supplied with the added runs: 9.11%. All deltas here use the measured 9.16% FP16 baseline.
+
+BnBINT8 denotes `bnb_int8`; INT4 denotes `int4_naive`. Added runs include quantization-only theoretical size and total time; `—` means not supplied for the earlier runs. Delta columns are absolute percentage points.
+
+| Sparsity | Method | WER% | ΔFP16 | ΔWandaOnly | Actual (MB) | Theor.Comb (MB) | RTF | Theor. Quant (MB) | Total Time (min) |
+|---|---|---|---|---|---|---|---|---|---|
+| 0% | **FP16 baseline** | 9.16% | 0.00 pp | — | — | — | — | — | — |
+| 10% | INT8 | 9.06% | -0.10 pp | -0.22 pp | 310.5 | 239.8 | 0.0196 | — | — |
+| 10% | FP8 | 9.24% | +0.08 pp | -0.04 pp | 310.6 | 239.8 | 0.0198 | — | — |
+| 10% | FP4 | 12.39% | +3.23 pp | +3.11 pp | 310.6 | 137.6 | 0.0248 | — | — |
+| 10% | BnBFP4 | 9.75% | +0.59 pp | +0.47 pp | 177.6 | 137.6 | 0.0194 | — | — |
+| 10% | BnBNF4 | 9.18% | +0.02 pp | -0.10 pp | 177.6 | 137.6 | 0.0186 | — | — |
+| 10% | BnBINT8 | 9.27% | +0.11 pp | -0.01 pp | 272.1 | 239.8 | 0.0334 | 234.1 | 66.6 |
+| 10% | INT4 | 24.84% | +15.68 pp | +15.56 pp | 310.5 | 137.6 | 0.0260 | 120.6 | 51.8 |
+| 10% | *Wanda-only ref* | *9.28%* | — | — | — | — | — | — | — |
+| 20% | INT8 | 9.36% | +0.20 pp | -0.22 pp | 310.5 | 217.2 | 0.0196 | — | — |
+| 20% | FP8 | 9.45% | +0.29 pp | -0.13 pp | 310.6 | 217.2 | 0.0197 | — | — |
+| 20% | FP4 | 12.77% | +3.61 pp | +3.19 pp | 310.6 | 126.3 | 0.0255 | — | — |
+| 20% | BnBFP4 | 9.71% | +0.55 pp | +0.13 pp | 177.6 | 126.3 | 0.0193 | — | — |
+| 20% | BnBNF4 | 9.79% | +0.63 pp | +0.21 pp | 177.6 | 126.3 | 0.0186 | — | — |
+| 20% | BnBINT8 | 8.99% | -0.17 pp | -0.59 pp | 272.1 | 217.2 | 0.0317 | 234.1 | 63.2 |
+| 20% | INT4 | 25.51% | +16.35 pp | +15.93 pp | 310.5 | 126.3 | 0.0265 | 120.6 | 52.9 |
+| 20% | *Wanda-only ref* | *9.58%* | — | — | — | — | — | — | — |
+| 30% | INT8 | 9.89% | +0.73 pp | -0.39 pp | 310.5 | 194.5 | 0.0199 | — | — |
+| 30% | FP8 | 9.82% | +0.66 pp | -0.46 pp | 310.6 | 194.5 | 0.0209 | — | — |
+| 30% | FP4 | 12.68% | +3.52 pp | +2.40 pp | 310.6 | 115.0 | 0.0251 | — | — |
+| 30% | BnBFP4 | 9.87% | +0.71 pp | -0.41 pp | 177.6 | 115.0 | 0.0189 | — | — |
+| 30% | BnBNF4 | 9.79% | +0.63 pp | -0.49 pp | 177.6 | 114.9 | 0.0187 | — | — |
+| 30% | BnBINT8 | 9.89% | +0.73 pp | -0.39 pp | 272.1 | 194.5 | 0.0326 | 234.1 | 64.9 |
+| 30% | INT4 | 22.81% | +13.65 pp | +12.53 pp | 310.5 | 115.0 | 0.0246 | 120.6 | 49.0 |
+| 30% | *Wanda-only ref* | *10.28%* | — | — | — | — | — | — | — |
+| 40% | INT8 | 9.94% | +0.78 pp | -0.18 pp | 310.5 | 171.7 | 0.0199 | — | — |
+| 40% | FP8 | 9.93% | +0.77 pp | -0.19 pp | 310.6 | 171.7 | 0.0204 | — | — |
+| 40% | FP4 | 13.85% | +4.69 pp | +3.73 pp | 310.6 | 103.6 | 0.0258 | — | — |
+| 40% | BnBFP4 | 10.74% | +1.58 pp | +0.62 pp | 177.6 | 103.6 | 0.0195 | — | — |
+| 40% | BnBNF4 | 10.23% | +1.07 pp | +0.11 pp | 177.6 | 103.6 | 0.0186 | — | — |
+| 40% | BnBINT8 | 9.95% | +0.79 pp | -0.17 pp | 272.1 | 171.7 | 0.0332 | 234.1 | 66.2 |
+| 40% | INT4 | 24.60% | +15.44 pp | +14.48 pp | 310.5 | 103.6 | 0.0258 | 120.6 | 51.4 |
+| 40% | *Wanda-only ref* | *10.12%* | — | — | — | — | — | — | — |
+| 45% | INT8 | 10.33% | +1.17 pp | -0.08 pp | 310.5 | 160.5 | 0.0198 | — | — |
+| 45% | FP8 | 10.63% | +1.47 pp | +0.22 pp | 310.6 | 160.5 | 0.0208 | — | — |
+| 45% | FP4 | 15.42% | +6.26 pp | +5.01 pp | 310.6 | 98.0 | 0.0257 | — | — |
+| 45% | BnBFP4 | 11.62% | +2.46 pp | +1.21 pp | 177.6 | 98.0 | 0.0188 | — | — |
+| 45% | BnBNF4 | 10.74% | +1.58 pp | +0.33 pp | 177.6 | 97.9 | 0.0184 | — | — |
+| 45% | BnBINT8 | 10.21% | +1.05 pp | -0.20 pp | 272.1 | 160.5 | 0.0324 | 234.1 | 64.5 |
+| 45% | INT4 | 26.79% | +17.63 pp | +16.38 pp | 310.5 | 98.0 | 0.0260 | 120.6 | 51.9 |
+| 45% | *Wanda-only ref* | *10.41%* | — | — | — | — | — | — | — |
+| 50% | INT8 | 11.96% | +2.80 pp | -0.05 pp | 310.5 | 148.9 | 0.0198 | — | — |
+| 50% | FP8 | 12.05% | +2.89 pp | +0.04 pp | 310.5 | 148.9 | 0.0202 | — | — |
+| 50% | FP4 | 17.45% | +8.29 pp | +5.44 pp | 310.5 | 92.2 | 0.0250 | — | — |
+| 50% | BnBFP4 | 12.66% | +3.50 pp | +0.65 pp | 177.6 | 92.2 | 0.0190 | — | — |
+| 50% | BnBNF4 | 12.44% | +3.28 pp | +0.43 pp | 177.6 | 92.2 | 0.0185 | — | — |
+| 50% | BnBINT8 | 11.93% | +2.77 pp | -0.08 pp | 272.1 | 148.9 | 0.0324 | 234.1 | 64.5 |
+| 50% | INT4 | 33.45% | +24.29 pp | +21.44 pp | 310.5 | 92.2 | 0.0289 | 120.6 | 57.6 |
+| 50% | *Wanda-only ref* | *12.01%* | — | — | — | — | — | — | — |
 
 *Interaction pivot: Δ vs Wanda-only (synergy/neutral/compound signal)*
 
-| Sparsity | INT8 | FP8 | FP4 | BnBFP4 | BnBNF4 |
-|---|---|---|---|---|---|
-| 10% | -0.22 | -0.04 | +3.11 | +0.47 | -0.10 |
-| 20% | -0.22 | -0.13 | +3.19 | +0.13 | +0.21 |
-| 30% | -0.39 | -0.46 | +2.40 | -0.41 | -0.49 |
-| 40% | -0.18 | -0.19 | +3.73 | +0.62 | +0.11 |
-| 45% | -0.08 | +0.22 | +5.01 | +1.21 | +0.33 |
-| 50% | -0.05 | +0.04 | +5.44 | +0.65 | +0.43 |
+| Sparsity | INT8 | FP8 | FP4 | BnBFP4 | BnBNF4 | BnBINT8 | INT4 |
+|---|---|---|---|---|---|---|---|
+| 10% | -0.22 | -0.04 | +3.11 | +0.47 | -0.10 | -0.01 | +15.56 |
+| 20% | -0.22 | -0.13 | +3.19 | +0.13 | +0.21 | -0.59 | +15.93 |
+| 30% | -0.39 | -0.46 | +2.40 | -0.41 | -0.49 | -0.39 | +12.53 |
+| 40% | -0.18 | -0.19 | +3.73 | +0.62 | +0.11 | -0.17 | +14.48 |
+| 45% | -0.08 | +0.22 | +5.01 | +1.21 | +0.33 | -0.20 | +16.38 |
+| 50% | -0.05 | +0.04 | +5.44 | +0.65 | +0.43 | -0.08 | +21.44 |
 
 *Classified:*
 
-| Sparsity | INT8 | FP8 | FP4 | BnBFP4 | BnBNF4 |
-|---|---|---|---|---|---|
-| 10% | Mild synergy | Mild synergy | Moderate compound | Neutral | Mild synergy |
-| 20% | Mild synergy | Mild synergy | Moderate compound | Neutral | Neutral |
-| 30% | Mild synergy | Mild synergy | Moderate compound | Mild synergy | Mild synergy |
-| 40% | Mild synergy | Mild synergy | Moderate compound | Neutral | Neutral |
-| 45% | Mild synergy | Neutral | Moderate compound | Neutral | Neutral |
-| 50% | Mild synergy | Neutral | Moderate compound | Neutral | Neutral |
+| Sparsity | INT8 | FP8 | FP4 | BnBFP4 | BnBNF4 | BnBINT8 | INT4 |
+|---|---|---|---|---|---|---|---|
+| 10% | Mild synergy | Mild synergy | Moderate compound | Neutral | Mild synergy | Mild synergy | Moderate compound |
+| 20% | Mild synergy | Mild synergy | Moderate compound | Neutral | Neutral | Mild synergy | Moderate compound |
+| 30% | Mild synergy | Mild synergy | Moderate compound | Mild synergy | Mild synergy | Mild synergy | Moderate compound |
+| 40% | Mild synergy | Mild synergy | Moderate compound | Neutral | Neutral | Mild synergy | Moderate compound |
+| 45% | Mild synergy | Neutral | Moderate compound | Neutral | Neutral | Mild synergy | Moderate compound |
+| 50% | Mild synergy | Neutral | Moderate compound | Neutral | Neutral | Mild synergy | SEVERE compound |
 
 #### Small-multilingual Complete (30/30) - Five Methods × Six Sparsity Levels
 
@@ -2077,83 +2125,141 @@ Pruned models are still stored as dense FP16 (0.450 GB for Small, 1.423 GB for M
 | 45% | Neutral | Neutral | Moderate compound | Neutral | Neutral |
 | 50% | Mild synergy | Mild synergy | Moderate compound | Moderate compound | Neutral |
 
-#### Medium-EN Complete (30/30) - Five Methods × Six Sparsity Levels
+#### Medium-EN Complete (42/42) - Seven Methods × Six Sparsity Levels
 
 **Medium-EN** (FP16 baseline: 8.94%)
 
-| Sparsity | Method | WER% | ΔFP16 | ΔWandaOnly | Actual (MB) | Theor.Comb (MB) | RTF |
-|---|---|---|---|---|---|---|---|
-| 10% | INT8 | 9.27% | +0.33% | -0.01% | 836.7 | 752.5 | 0.0472 |
-| 10% | FP8 | 9.06% | +0.12% | -0.22% | 836.7 | 752.5 | 0.0500 |
-| 10% | FP4 | 9.21% | +0.27% | -0.07% | 836.7 | 427.2 | 0.0614 |
-| 10% | BnBFP4 | 8.99% | +0.05% | -0.29% | 448.9 | 427.2 | 0.0462 |
-| 10% | BnBNF4 | 9.38% | +0.44% | +0.10% | 448.9 | 427.1 | 0.0448 |
-| 10% | *Wanda-only ref* | *9.28%* | — | — | — | — | — |
-| 20% | INT8 | 9.08% | +0.14% | +0.04% | 836.7 | 680.4 | 0.0470 |
-| 20% | FP8 | 9.02% | +0.08% | -0.02% | 836.7 | 680.4 | 0.0500 |
-| 20% | FP4 | 9.35% | +0.41% | +0.31% | 836.7 | 391.2 | 0.0617 |
-| 20% | BnBFP4 | 9.01% | +0.07% | -0.03% | 448.9 | 391.2 | 0.0464 |
-| 20% | BnBNF4 | 9.28% | +0.34% | +0.24% | 448.9 | 391.0 | 0.0450 |
-| 20% | *Wanda-only ref* | *9.04%* | — | — | — | — | — |
-| 30% | INT8 | 9.07% | +0.13% | +0.01% | 836.7 | 607.8 | 0.0471 |
-| 30% | FP8 | 9.22% | +0.28% | +0.16% | 836.7 | 607.8 | 0.0474 |
-| 30% | FP4 | 9.17% | +0.23% | +0.11% | 836.7 | 354.9 | 0.0598 |
-| 30% | BnBFP4 | 9.22% | +0.28% | +0.16% | 448.9 | 354.9 | 0.0451 |
-| 30% | BnBNF4 | 9.25% | +0.31% | +0.19% | 448.9 | 354.9 | 0.0452 |
-| 30% | *Wanda-only ref* | *9.06%* | — | — | — | — | — |
-| 40% | INT8 | 9.68% | +0.74% | +0.11% | 836.7 | 535.8 | 0.0489 |
-| 40% | FP8 | 9.45% | +0.51% | -0.12% | 836.7 | 535.8 | 0.0504 |
-| 40% | FP4 | 9.51% | +0.57% | -0.06% | 836.7 | 318.9 | 0.0603 |
-| 40% | BnBFP4 | 9.66% | +0.72% | +0.09% | 448.9 | 318.9 | 0.0464 |
-| 40% | BnBNF4 | 9.45% | +0.51% | -0.12% | 448.9 | 318.7 | 0.0466 |
-| 40% | *Wanda-only ref* | *9.57%* | — | — | — | — | — |
-| 45% | INT8 | 9.63% | +0.69% | -0.01% | 836.7 | 499.7 | 0.0491 |
-| 45% | FP8 | 9.90% | +0.96% | +0.26% | 836.7 | 499.7 | 0.0487 |
-| 45% | FP4 | 9.87% | +0.93% | +0.23% | 836.7 | 300.9 | 0.0603 |
-| 45% | BnBFP4 | 9.83% | +0.89% | +0.19% | 448.9 | 300.9 | 0.0457 |
-| 45% | BnBNF4 | 9.89% | +0.95% | +0.25% | 448.9 | 300.7 | 0.0467 |
-| 45% | *Wanda-only ref* | *9.64%* | — | — | — | — | — |
-| 50% | INT8 | 10.28% | +1.34% | +0.05% | 836.7 | 463.2 | 0.0474 |
-| 50% | FP8 | 10.46% | +1.52% | +0.23% | 836.7 | 463.2 | 0.0483 |
-| 50% | FP4 | 11.05% | +2.11% | +0.82% | 836.7 | 282.6 | 0.0591 |
-| 50% | BnBFP4 | 10.78% | +1.84% | +0.55% | 448.9 | 282.6 | 0.0451 |
-| 50% | BnBNF4 | 10.82% | +1.88% | +0.59% | 448.9 | 282.6 | 0.0450 |
-| 50% | *Wanda-only ref* | *10.23%* | — | — | — | — | — |
+Paper WER supplied with the added runs: 8.91%. All deltas here use the measured 8.94% FP16 baseline; the supplied paper WER is recorded as provided, not independently reverified.
+
+BnBINT8 denotes `bnb_int8`; INT4 denotes `int4_naive`. Added runs include quantization-only theoretical size and total time; `—` means not supplied for the earlier runs. Delta columns are absolute percentage points.
+
+| Sparsity | Method | WER% | ΔFP16 | ΔWandaOnly | Actual (MB) | Theor.Comb (MB) | RTF | Theor. Quant (MB) | Total Time (min) |
+|---|---|---|---|---|---|---|---|---|---|
+| 0% | **FP16 baseline** | 8.94% | 0.00 pp | — | — | — | — | — | — |
+| 10% | INT8 | 9.27% | +0.33 pp | -0.01 pp | 836.7 | 752.5 | 0.0472 | — | — |
+| 10% | FP8 | 9.06% | +0.12 pp | -0.22 pp | 836.7 | 752.5 | 0.0500 | — | — |
+| 10% | FP4 | 9.21% | +0.27 pp | -0.07 pp | 836.7 | 427.2 | 0.0614 | — | — |
+| 10% | BnBFP4 | 8.99% | +0.05 pp | -0.29 pp | 448.9 | 427.2 | 0.0462 | — | — |
+| 10% | BnBNF4 | 9.38% | +0.44 pp | +0.10 pp | 448.9 | 427.1 | 0.0448 | — | — |
+| 10% | BnBINT8 | 9.02% | +0.08 pp | -0.26 pp | 784.9 | 752.5 | 0.0708 | 734.3 | 141.0 |
+| 10% | INT4 | 9.26% | +0.32 pp | -0.02 pp | 836.7 | 427.2 | 0.0472 | 372.9 | 94.1 |
+| 10% | *Wanda-only ref* | *9.28%* | — | — | — | — | — | — | — |
+| 20% | INT8 | 9.08% | +0.14 pp | +0.04 pp | 836.7 | 680.4 | 0.0470 | — | — |
+| 20% | FP8 | 9.02% | +0.08 pp | -0.02 pp | 836.7 | 680.4 | 0.0500 | — | — |
+| 20% | FP4 | 9.35% | +0.41 pp | +0.31 pp | 836.7 | 391.2 | 0.0617 | — | — |
+| 20% | BnBFP4 | 9.01% | +0.07 pp | -0.03 pp | 448.9 | 391.2 | 0.0464 | — | — |
+| 20% | BnBNF4 | 9.28% | +0.34 pp | +0.24 pp | 448.9 | 391.0 | 0.0450 | — | — |
+| 20% | BnBINT8 | 9.20% | +0.26 pp | +0.16 pp | 784.9 | 680.4 | 0.0709 | 734.3 | 141.2 |
+| 20% | INT4 | 9.30% | +0.36 pp | +0.26 pp | 836.7 | 391.2 | 0.0468 | 372.9 | 93.3 |
+| 20% | *Wanda-only ref* | *9.04%* | — | — | — | — | — | — | — |
+| 30% | INT8 | 9.07% | +0.13 pp | +0.01 pp | 836.7 | 607.8 | 0.0471 | — | — |
+| 30% | FP8 | 9.22% | +0.28 pp | +0.16 pp | 836.7 | 607.8 | 0.0474 | — | — |
+| 30% | FP4 | 9.17% | +0.23 pp | +0.11 pp | 836.7 | 354.9 | 0.0598 | — | — |
+| 30% | BnBFP4 | 9.22% | +0.28 pp | +0.16 pp | 448.9 | 354.9 | 0.0451 | — | — |
+| 30% | BnBNF4 | 9.25% | +0.31 pp | +0.19 pp | 448.9 | 354.9 | 0.0452 | — | — |
+| 30% | BnBINT8 | 9.23% | +0.29 pp | +0.17 pp | 784.9 | 607.8 | 0.0703 | 734.3 | 139.9 |
+| 30% | INT4 | 9.31% | +0.37 pp | +0.25 pp | 836.7 | 354.9 | 0.0468 | 372.9 | 93.4 |
+| 30% | *Wanda-only ref* | *9.06%* | — | — | — | — | — | — | — |
+| 40% | INT8 | 9.68% | +0.74 pp | +0.11 pp | 836.7 | 535.8 | 0.0489 | — | — |
+| 40% | FP8 | 9.45% | +0.51 pp | -0.12 pp | 836.7 | 535.8 | 0.0504 | — | — |
+| 40% | FP4 | 9.51% | +0.57 pp | -0.06 pp | 836.7 | 318.9 | 0.0603 | — | — |
+| 40% | BnBFP4 | 9.66% | +0.72 pp | +0.09 pp | 448.9 | 318.9 | 0.0464 | — | — |
+| 40% | BnBNF4 | 9.45% | +0.51 pp | -0.12 pp | 448.9 | 318.7 | 0.0466 | — | — |
+| 40% | BnBINT8 | 9.30% | +0.36 pp | -0.27 pp | 784.9 | 535.8 | 0.0738 | 734.3 | 147.0 |
+| 40% | INT4 | 9.67% | +0.73 pp | +0.10 pp | 836.7 | 318.9 | 0.0478 | 372.9 | 95.3 |
+| 40% | *Wanda-only ref* | *9.57%* | — | — | — | — | — | — | — |
+| 45% | INT8 | 9.63% | +0.69 pp | -0.01 pp | 836.7 | 499.7 | 0.0491 | — | — |
+| 45% | FP8 | 9.90% | +0.96 pp | +0.26 pp | 836.7 | 499.7 | 0.0487 | — | — |
+| 45% | FP4 | 9.87% | +0.93 pp | +0.23 pp | 836.7 | 300.9 | 0.0603 | — | — |
+| 45% | BnBFP4 | 9.83% | +0.89 pp | +0.19 pp | 448.9 | 300.9 | 0.0457 | — | — |
+| 45% | BnBNF4 | 9.89% | +0.95 pp | +0.25 pp | 448.9 | 300.7 | 0.0467 | — | — |
+| 45% | BnBINT8 | 10.02% | +1.08 pp | +0.38 pp | 784.9 | 499.7 | 0.0746 | 734.3 | 148.6 |
+| 45% | INT4 | 9.83% | +0.89 pp | +0.19 pp | 836.7 | 300.9 | 0.0484 | 372.9 | 96.5 |
+| 45% | *Wanda-only ref* | *9.64%* | — | — | — | — | — | — | — |
+| 50% | INT8 | 10.28% | +1.34 pp | +0.05 pp | 836.7 | 463.2 | 0.0474 | — | — |
+| 50% | FP8 | 10.46% | +1.52 pp | +0.23 pp | 836.7 | 463.2 | 0.0483 | — | — |
+| 50% | FP4 | 11.05% | +2.11 pp | +0.82 pp | 836.7 | 282.6 | 0.0591 | — | — |
+| 50% | BnBFP4 | 10.78% | +1.84 pp | +0.55 pp | 448.9 | 282.6 | 0.0451 | — | — |
+| 50% | BnBNF4 | 10.82% | +1.88 pp | +0.59 pp | 448.9 | 282.6 | 0.0450 | — | — |
+| 50% | BnBINT8 | 10.33% | +1.39 pp | +0.10 pp | 784.9 | 463.2 | 0.0740 | 734.3 | 147.3 |
+| 50% | INT4 | 11.17% | +2.23 pp | +0.94 pp | 836.7 | 282.6 | 0.0488 | 372.9 | 97.4 |
+| 50% | *Wanda-only ref* | *10.23%* | — | — | — | — | — | — | — |
 
 *Interaction pivot: Δ vs Wanda-only (synergy/neutral/compound signal)*
 
-| Sparsity | INT8 | FP8 | FP4 | BnBFP4 | BnBNF4 |
-|---|---|---|---|---|---|
-| 10% | -0.01 | -0.22 | -0.07 | -0.29 | +0.10 |
-| 20% | +0.04 | -0.02 | +0.31 | -0.03 | +0.24 |
-| 30% | +0.01 | +0.16 | +0.11 | +0.16 | +0.19 |
-| 40% | +0.11 | -0.12 | -0.06 | +0.09 | -0.12 |
-| 45% | -0.01 | +0.26 | +0.23 | +0.19 | +0.25 |
-| 50% | +0.05 | +0.23 | +0.82 | +0.55 | +0.59 |
+| Sparsity | INT8 | FP8 | FP4 | BnBFP4 | BnBNF4 | BnBINT8 | INT4 |
+|---|---|---|---|---|---|---|---|
+| 10% | -0.01 | -0.22 | -0.07 | -0.29 | +0.10 | -0.26 | -0.02 |
+| 20% | +0.04 | -0.02 | +0.31 | -0.03 | +0.24 | +0.16 | +0.26 |
+| 30% | +0.01 | +0.16 | +0.11 | +0.16 | +0.19 | +0.17 | +0.25 |
+| 40% | +0.11 | -0.12 | -0.06 | +0.09 | -0.12 | -0.27 | +0.10 |
+| 45% | -0.01 | +0.26 | +0.23 | +0.19 | +0.25 | +0.38 | +0.19 |
+| 50% | +0.05 | +0.23 | +0.82 | +0.55 | +0.59 | +0.10 | +0.94 |
 
 *Classified:*
 
-| Sparsity | INT8 | FP8 | FP4 | BnBFP4 | BnBNF4 |
-|---|---|---|---|---|---|
-| 10% | Mild synergy | Mild synergy | Mild synergy | Mild synergy | Neutral |
-| 20% | Neutral | Mild synergy | Neutral | Mild synergy | Neutral |
-| 30% | Neutral | Neutral | Neutral | Neutral | Neutral |
-| 40% | Neutral | Mild synergy | Mild synergy | Neutral | Mild synergy |
-| 45% | Mild synergy | Neutral | Neutral | Neutral | Neutral |
-| 50% | Neutral | Neutral | Neutral | Neutral | Neutral |
+| Sparsity | INT8 | FP8 | FP4 | BnBFP4 | BnBNF4 | BnBINT8 | INT4 |
+|---|---|---|---|---|---|---|---|
+| 10% | Mild synergy | Mild synergy | Mild synergy | Mild synergy | Neutral | Mild synergy | Mild synergy |
+| 20% | Neutral | Mild synergy | Neutral | Mild synergy | Neutral | Neutral | Neutral |
+| 30% | Neutral | Neutral | Neutral | Neutral | Neutral | Neutral | Neutral |
+| 40% | Neutral | Mild synergy | Mild synergy | Neutral | Mild synergy | Mild synergy | Neutral |
+| 45% | Mild synergy | Neutral | Neutral | Neutral | Neutral | Neutral | Neutral |
+| 50% | Neutral | Neutral | Neutral | Neutral | Neutral | Neutral | Neutral |
 
-#### Cross-Model Synthesis (All Six Variants, 180 Combinations)
+#### Cross-Model Synthesis (Original Five-Method Sweep: Six Variants, 180 Combinations)
+
+The findings below describe the original five-method sweep. The seven-method paper-subset analysis follows separately; claims of uniqueness or worst-case behavior below are restricted to that original sweep.
 
 **The tiny/base-scale data reveals a finding invisible in the original three-model study: a specific method (BnB FP4) becomes catastrophically fragile on a specific checkpoint (Tiny-EN-Dutta), at every sparsity level, not just at high sparsity.**
 
-- **Tiny-EN-Dutta's BnB FP4 is SEVERE compound at all six sparsity levels without exception** (+48.47 to +429.80, worst single result across the entire 180-combination study). This is a sharp reversal from the pruning-alone finding (Week 11-14), where Wanda pruning *rescued* Dutta's checkpoint relative to Tiny-EN-ours - adding BnB FP4 quantization on top of that same Wanda pruning eliminates the rescue entirely and produces the single worst outcome in this whole study. Tiny-EN-ours's own BnB FP4 only turns SEVERE at the top two sparsity levels (45%, 50%); Base-EN-ours's only at 50%. Dutta's checkpoint is uniquely fragile to this specific method across its *entire* tested range, not just at high sparsity like the other two.
+- **Tiny-EN-Dutta's BnB FP4 is SEVERE compound at all six sparsity levels without exception** (+48.47 to +429.80, worst additional degradation in the original 180-combination sweep). This is a sharp reversal from the pruning-alone finding (Week 11-14), where Wanda pruning *rescued* Dutta's checkpoint relative to Tiny-EN-ours - adding BnB FP4 quantization on top of that same Wanda pruning eliminates the rescue entirely and produces the worst additional degradation in that original sweep. Tiny-EN-ours's own BnB FP4 only turns SEVERE at the top two sparsity levels (45%, 50%); Base-EN-ours's only at 50%. Dutta's checkpoint is uniquely fragile to this specific method across its *entire* tested range, not just at high sparsity like the other two.
 - **FP4 naive compounds at every sparsity on four of six models** (Tiny-EN-ours, Tiny-EN-Dutta, Base-EN-ours, Small-EN) - only Small-multilingual and Medium-EN show any non-compounding FP4 results at all (10 of 36 total FP4 combinations across the study, all from these two models, all at low-to-moderate sparsity before compounding emerges later).
-- **INT8 naive never compounds on any of the six models, at any sparsity level tested** - the only method with a perfect record across the full 180-combination study. This extends the three-model finding cleanly to the smaller-capacity checkpoints as well, reinforcing INT8 as the most broadly reliable compression choice found anywhere in this research.
+- **INT8 naive never compounds on any of the six models, at any sparsity level tested** - the only method with a perfect record among the original five methods across all six checkpoints; the added BnB-INT8 runs also have zero compounding cases on the four paper checkpoints. This extends the three-model finding cleanly to the smaller-capacity checkpoints as well, reinforcing INT8 as the most broadly reliable compression choice found anywhere in this research.
 - **Tiny-EN-Dutta's FP4 naive reaches +297.87 already at 10% sparsity** - the mildest sparsity tested - confirming this checkpoint's fragility to fixed 4-bit grids (already established under quantization alone in Week 8-10, and under magnitude pruning alone in Week 11-14) persists essentially unchanged when combined with even light pruning, rather than being something pruning either causes or masks.
 - **The training-recipe divergence between the two tiny.en checkpoints, previously shown to reverse direction between magnitude pruning (Dutta far worse) and Wanda pruning alone (Dutta comparable-to-better), resolves toward "Dutta is more fragile" once quantization is added on top of Wanda pruning** - BnB FP4 and FP4 naive are both dramatically worse on Dutta than on Tiny-EN-ours across nearly the whole sparsity range, suggesting the earlier Wanda-pruning rescue does not extend to the combined pruning+quantization setting for this checkpoint pair.
 
-**Now complete: all six variants, five methods, six sparsity levels (180 total combinations) across the entire Week 15 combined pruning+quantization study.**
+**Updated completion: 168/168 paper configurations and 228 total Week 15 configurations.**
 
+
+#### Updated Paper-Subset Analysis (Four Checkpoints, Seven Methods, 168 Configurations)
+
+Compounding means Δ vs matched-sparsity Wanda-only >2 pp; severe compounding means >20 pp. Negative changes are described as synergy in the historical tables, but no statistical significance is implied. These categories do not indicate whether a configuration meets the separate +2 pp FP16 budget.
+
+| Method | Runs | Compound (>2 pp) | Severe (>20 pp) | Mean ΔWandaOnly (pp) | Maximum ΔWandaOnly (pp) | Within +2 pp FP16 |
+|---|---|---|---|---|---|---|
+| INT8 | 24 | 0 | 0 | -0.12 | +0.20 | 17/24 |
+| FP8 | 24 | 2 | 0 | +0.41 | +8.23 | 17/24 |
+| BnBINT8 | 24 | 0 | 0 | +0.06 | +1.75 | 17/24 |
+| INT4 | 24 | 18 | 13 | +291.00 | +660.35 | 5/24 |
+| FP4 | 24 | 18 | 9 | +25.11 | +156.79 | 5/24 |
+| BnBFP4 | 24 | 12 | 3 | +11.50 | +153.41 | 10/24 |
+| BnBNF4 | 24 | 7 | 2 | +6.43 | +94.18 | 15/24 |
+
+**Lowest-WER counts among the three 8-bit methods:** ties at the displayed two-decimal precision are counted for each tied method, so counts can exceed the number of cells.
+
+| Group | Cells | INT8 | FP8 | BnBINT8 |
+|---|---|---|---|---|
+| Tiny/Base | 12 | 6 | 3 | 3 |
+| Small/Medium | 12 | 4 | 3 | 5 |
+| All four | 24 | 10 | 6 | 8 |
+
+**Interpretation and paper update:**
+
+The four-bit comparison remains favorable to NF4 in both paper groups:
+
+| Method | Tiny/Base mean ΔWandaOnly (pp) | Tiny/Base maximum (pp) | Small/Medium mean ΔWandaOnly (pp) | Small/Medium maximum (pp) |
+|---|---|---|---|---|
+| INT4 | +573.84 | +660.35 | +8.17 | +21.44 |
+| FP4 | +48.20 | +156.79 | +2.02 | +5.44 |
+| BnBFP4 | +22.72 | +153.41 | +0.28 | +1.21 |
+| BnBNF4 | +12.72 | +94.18 | +0.14 | +0.59 |
+
+- Both naive INT8 and BnB-INT8 have zero compounding cases across their 24 paper-subset runs. The draft's statement that naive INT8 is the *only* method with no compounding cases is no longer supported. BnB-INT8's ΔWandaOnly ranges from -0.80 to +1.75 pp. Its high-sparsity Tiny WER can still be poor because the Wanda-only reference itself has degraded.
+- Naive INT4 is severely compounding at all six sparsities for Tiny-EN-ours and Base-EN-ours. Small-EN compounds at all six (severely at 50%), whereas Medium-EN has no compounding cases. This gives 18/24 compounding cases, including 13 severe cases. The maximum added error is +660.35 pp for Tiny-EN-ours at 40% sparsity; the maximum total WER is 764.34% at 50%. These are different criteria for identifying the worst configuration.
+- The draft's 8-bit winner claim must follow the counts above rather than the earlier five-method comparison. Any preference for naive INT8 over BnB-INT8 needs a stated criterion, such as the observed accuracy/runtime trade-off, rather than uniqueness of non-compounding behavior.
+- Actual sizes and theoretical sizes are different measurements. For the added runs, BnB-INT8 actual sizes are 56.3, 96.5, 272.1, and 784.9 MB (Tiny through Medium), versus 75.4, 122.0, 310.5, and 836.7 MB for naive INT4. Actual sizes are constant across sparsity within each method/checkpoint, while theoretical combined sizes decrease. Preserve the supplied theoretical quantization and combined columns independently: some low-sparsity combined estimates exceed the quantization-only estimates, so these columns must not be assumed to use an identical storage accounting convention without checking the implementation.
+- The newly supplied total times are recorded per run in the main tables. They do not supply calibration, pruning, or checkpoint-I/O breakdowns; no component times were inferred. Cross-batch RTF comparisons are descriptive unless hardware and evaluation conditions are confirmed identical.
 
 #### Size: Actual vs. Theoretical, and a Real Implementation Gap Worth Documenting
 
