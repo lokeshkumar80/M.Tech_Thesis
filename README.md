@@ -1220,6 +1220,8 @@ drawing conclusions about it.
 
 *Protocol: identical to Tiny-EN-ours above. This is a training-recipe comparison at matched architecture, NOT a capacity comparison - Dutta et al.'s checkpoint uses a different MyST filtering/split scheme than this study's own pipeline. `INT4 packed`/`FP4 packed` results are excluded here: the two on-disk result files for this checkpoint predate the `all_packed` dispatch-bug fix (documented in Week 11-14) and show the exact FP16-identical symptom of that bug (12.06%, +0.00% delta on both) - they were never re-run per an explicit decision to skip re-running `all_packed` for this checkpoint, so they are stale artifacts, not real packed-quantization results.*
 
+**Source paper [19]:** Dutta et al. fine-tune tiny.en on MyST (15.9% WER; 11.8% on their filtered test set) and apply a low-rank compression to the encoder: encoder size reduced by 0.51M parameters, 1.26x faster GPU inference, and about 11% relative WER increase; on a Raspberry Pi the compressed model needs about 2 GFLOPS fewer computations and real-time factors for the two models range from 0.23 to 0.41. The results below apply post-training quantization to that checkpoint; the low-rank compression itself is not reproduced here.
+
 | Method | WER% | vs FP16 | Actual (MB) | Theor. (MB) | RTF |
 |---|---|---|---|---|---|
 | **FP16 baseline** | **12.06%** | — | **72.0** | **72.1** | **0.0056** |
@@ -1326,7 +1328,7 @@ drawing conclusions about it.
 - **Training recipe matters as much as architecture for compression robustness.** Comparing the two independently-trained tiny.en checkpoints at matched architecture: Tiny-EN-Dutta's INT4 naive (648.26%) and FP4 naive (287.25%) are both far worse than Tiny-EN-ours' (611.04%, 30.96%) - particularly FP4 naive, nearly 10x worse on Dutta's checkpoint. Yet Tiny-EN-Dutta's BnB NF4 (14.41%) is close to its own FP16 baseline while Tiny-EN-ours' BnB FP4 (20.50%) shows more degradation - the two checkpoints are not uniformly more or less robust than each other, they diverge differently by method, suggesting the specific weight distribution each training run converges to (not just the training data volume/filtering) interacts differently with different quantization grids.
 - **K-means at k=256 is consistently competitive or better across every fine-tuned model tested so far**, including the two smallest: Tiny-EN-ours (15.61%, beats every naive/pct method except INT8/FP8/BnB-INT8, and beats BnB FP4/NF4 too) and Tiny-EN-Dutta (13.52%, better than everything except FP16/INT8/FP8/BnB-INT8/BnB-NF4) both confirm the k=256 convergence pattern first established on Medium-EN and Small-multilingual extends down to 39M scale.
 
-**Remaining:** k-means sweep for Base-EN-ours; `all_packed` re-run for Tiny-EN-Dutta (to replace the stale pre-fix result files) if a real packed-method data point is wanted for that checkpoint.
+**Note:** the k-means sweep for Base-EN-ours is included in the cross-model table below (k=16: 357.93%, k=32: 25.62%, k=256: 12.61%). The `all_packed` result files for Tiny-EN-Dutta predate a pipeline fix and are not reported.
 
 ---
 
@@ -2261,6 +2263,33 @@ The four-bit comparison remains favorable to NF4 in both paper groups:
 - Actual sizes and theoretical sizes are different measurements. For the added runs, BnB-INT8 actual sizes are 56.3, 96.5, 272.1, and 784.9 MB (Tiny through Medium), versus 75.4, 122.0, 310.5, and 836.7 MB for naive INT4. Actual sizes are constant across sparsity within each method/checkpoint, while theoretical combined sizes decrease. Preserve the supplied theoretical quantization and combined columns independently: some low-sparsity combined estimates exceed the quantization-only estimates, so these columns must not be assumed to use an identical storage accounting convention without checking the implementation.
 - The newly supplied total times are recorded per run in the main tables. They do not supply calibration, pruning, or checkpoint-I/O breakdowns; no component times were inferred. Cross-batch RTF comparisons are descriptive unless hardware and evaluation conditions are confirmed identical.
 
+#### Operating Points Under a +2 pp Budget (Paper Table 4)
+
+Highest tested sparsity for each checkpoint group at which the compressed model stays within +2 pp of its FP16 WER (shared policy per group: INT8 at 30% for Tiny/Base and 45% for Small/Medium; BnB NF4 at 45% for Small/Medium, 30% for Base, and 10% for Tiny, whose WER at 30% is +2.11 pp). Theoretical size uses the sparse-storage convention defined under Actual vs. Theoretical size above, with the combined column from the tables in this Week and FP16 sizes from the pruning tables.
+
+| Checkpoint | Method | Sparsity | WER% | Delta FP16 (pp) | Theor. Comb (MB) | FP16 (MB) | Theoretical reduction |
+|---|---|---|---|---|---|---|---|
+| Tiny-EN-ours | INT8 | 30% | 15.04% | +0.51 | 31.2 | 72.0 | 56.7% |
+| Tiny-EN-ours | BnB NF4 | 10% | 16.46% | +1.93 | 22.5 | 72.0 | 68.8% |
+| Base-EN-ours | INT8 | 30% | 12.69% | +0.78 | 59.4 | 138.5 | 57.1% |
+| Base-EN-ours | BnB NF4 | 30% | 13.51% | +1.60 | 35.8 | 138.5 | 74.2% |
+| Small-EN | INT8 | 45% | 10.33% | +1.17 | 160.5 | 461.1 | 65.2% |
+| Small-EN | BnB NF4 | 45% | 10.74% | +1.58 | 97.9 | 461.1 | 78.8% |
+| Medium-EN | INT8 | 45% | 9.63% | +0.69 | 499.7 | 1456.9 | 65.7% |
+| Medium-EN | BnB NF4 | 45% | 9.89% | +0.95 | 300.7 | 1456.9 | 79.4% |
+
+Medium-EN also stays within the budget at 50% (INT8 10.28%, BnB NF4 10.82%); 45% is kept as the shared Small/Medium policy. Over the 24 paper-subset configurations per method, the mean absolute change from the matched Wanda-only run is 0.165 pp for naive INT8 (maximum increase +0.20 pp) and 0.345 pp for BnB-INT8 (maximum increase +1.75 pp), computed from the per-checkpoint tables above.
+
+#### Repetition-Loop Audit (MyST)
+
+`scripts/analyze_repetition.py` scans every `*_mismatches.txt` file, pairs it with its result JSON, and for each configuration with WER of at least 100% reports (a) the share of mismatched utterances (chunks) in which a single word is repeated at least 20 times ("extreme repetition") and (b) the share of inserted words accounted for by the five most frequent inserted words. A failure of this kind is the looping hallucination described for Whisper in [21].
+
+- All catastrophic configurations examined were dominated by repetition loops.
+- **Magnitude pruning at 45%:** Base-EN-ours (750.64% WER) shows extreme repetition in 93.1% of its mismatched chunks and Tiny-EN-ours (395.55%) in 62.1%, the mechanism behind the size reversal.
+- **Wanda + quantization at 50%, Tiny-EN-ours:** BnB NF4 gives 208.30% WER (26.5% extreme repetition) and INT8 naive gives 113.37% (13.5%).
+- **Rule-based collapse of repeated words** (a validation of recoverability, not a reported method) brings Tiny-EN-ours at 50% Wanda from 113.37% to 42.27% (INT8) and from 208.30% to 50.93% (BnB NF4).
+- The sub-4-bit and low-k k-means collapses examined in the same audit were likewise repetition-driven.
+
 #### Size: Actual vs. Theoretical, and a Real Implementation Gap Worth Documenting
 
 | Method | Sparsity | Actual GB | Theoretical (quant-only) GB | Theoretical (combined) GB | Tied-embedding overhead |
@@ -2299,7 +2328,7 @@ The four-bit comparison remains favorable to NF4 in both paper groups:
 
 **Wanda calibration:** unchanged from every prior week - still drawn from MyST's filtered training samples, not CMU-specific. The question being tested is whether a compression decision made using the model's own training-adjacent data generalizes to a new evaluation corpus, not whether compression can be tuned per-corpus; using CMU-specific calibration would answer a different question and break comparability with every MyST-only result in this study, which are all MyST-calibrated themselves. This is also supported by what's known about Wanda's calibration sensitivity more generally: Wanda's importance ranking (`|W_ij| × ||X_j||_2`) is computed once and frozen as a fixed mask, not updated iteratively the way SparseGPT's Hessian-based approach is - and an empirical study across several LLM compression methods found Wanda's downstream sensitivity to calibration data choice, while non-zero, consistently narrower than SparseGPT's (0.6-2.9% for Wanda vs 2.4-4.8% for SparseGPT across the models tested) ([Williams & Aletras, ACL 2024](https://arxiv.org/abs/2311.09755)). This evidence is from text-domain LLM compression, not speech, and the direct MyST-vs-CMU-calibration ablation was not run in this study - so this is a documented reason to expect the difference is modest, not a proven fact for this exact setting.
 
-**Scope:** all 6 fine-tuned checkpoints × 3 study types = 180 results, 100% coverage confirmed (36 quantization-only + 24 Wanda-only + 120 combined). Scripts: `preprocess_cmu_test.py`, `evaluate_baseline_cmu.py`, and `--test_dir`-patched versions of `18_kid_whisper_ptq.py`, `22_wanda_pruning.py`, `24_combined_pruning_quantization.py`.
+**Scope:** all 6 fine-tuned checkpoints × 3 study types = 180 results in the initial batch, 100% coverage confirmed (36 quantization-only + 24 Wanda-only at 10-40% + 120 combined); Week 17 adds Wanda at 45% and 50% (12 results) and magnitude pruning at 10-50% (36 results), for 228 CMU results in total. Scripts: `preprocess_cmu_test.py`, `evaluate_baseline_cmu.py`, and `--test_dir`-patched versions of `18_kid_whisper_ptq.py`, `22_wanda_pruning.py`, `24_combined_pruning_quantization.py`.
 
 ---
 
@@ -2684,13 +2713,139 @@ The four-bit comparison remains favorable to NF4 in both paper groups:
 
 1. **The training-recipe reversal replicates and sharpens.** Tiny-EN-ours vs Tiny-EN-Dutta (confirmed identical at 37.76M params and architecture by direct inspection of both loaded checkpoints - see the parameter-count correction note below) diverge dramatically under FP4-family quantization on CMU: Tiny-EN-Dutta reaches 3168.67% WER under FP4 naive and 1006.83% under BnB FP4, against 68.67%/52.39% for Tiny-EN-ours. Manual inspection of the prediction files identifies the mechanism directly: a sharp rise in decoder repetition-loop failures (e.g. "the and the and the...") rather than uniformly worse transcription. Counting predictions >30 characters longer than their reference (post-normalization) as a repetition-loop proxy: both checkpoints sit at a similar ~1% failure rate under FP16 (1.25% ours, 0.81% Dutta), and Tiny-EN-ours barely moves under FP4-family methods (1.13-1.75%), but Tiny-EN-Dutta's rate explodes to 26.89% (BnB FP4) and 71.17% (FP4 naive). FP4-family quantization does not uniformly degrade Dutta's checkpoint so much as dramatically amplify a decoder-termination failure mode already latent in both checkpoints under FP16.
 
-2. **The Wanda+INT8 "never compounds" recipe safety claim does not fully generalize.** On MyST (Week 15), INT8 naive on top of Wanda pruning never compounds across all 180 configurations. On CMU, restricted to the three sub-244M checkpoints where this recipe is recommended: 5 of 12 INT8 combinations compound (1 severely - Tiny-EN-Dutta at 40% sparsity, +21.64pp vs Wanda-only), while all 12 corresponding FP4 combinations compound severely. INT8 remains far safer than FP4 in relative terms, but "never compounds" turns out to be a MyST-specific finding, not a universal guarantee about the recipe.
+2. **INT8 recipe safety on CMU: raw differences exceed 2 pp in 5 of 12 comparisons, but nearly all of the excess is a few looping outputs.** On MyST (Week 15), INT8 naive on top of Wanda adds more than 2 pp over Wanda-only in none of the 36 comparisons across the six checkpoints (largest +1.29 pp, Tiny-EN-Dutta at 40%). On CMU, restricted to the three sub-244M checkpoints where this recipe is recommended, 5 of 12 INT8 comparisons exceed 2 pp on raw WER (Tiny-EN-Dutta at 30% and 40%; Base-EN-ours at 10%, 20%, 30%; the largest is +21.64 pp), while all 12 corresponding FP4 combinations compound severely. The Week 17 audit shows the INT8 excess is mostly 1 to 5 additional utterances that loop (the +21.64 pp case is 5 extra looping outputs, about 0.3% of utterances): after subtracting their estimated contribution only 1 of 12 remains above 2 pp (Tiny-EN-Dutta at 40%, +2.53 pp). INT8 still produces more looping outputs than Wanda alone in 12 of 24 comparisons and fewer in 2 (two-sided sign test p = 0.013; the comparisons are not independent), so the supportable statement is that INT8 leaves accuracy on ordinary utterances essentially unchanged and occasionally adds a looping output. See Week 17.
 
-3. **Grid preference (FP4 vs NF4) also does not fully generalize.** Comparing each checkpoint's own MyST (Week 8-10) and CMU grid preference: 4 of 6 checkpoints keep the same winner, but 2 reverse. Small-multilingual's reversal is minor (MyST margin was already only 0.11pp - within the sub-1pp range already treated as indicative rather than decisive). Base-EN-ours' reversal is substantial: a 2.92pp margin favoring NF4 on MyST (12.82% vs 15.74%) becomes a 4.78pp margin favoring FP4 on CMU (35.39% vs 40.17%) - a genuine flip in a checkpoint comfortably below the 244M threshold where the capacity-based rule is supposed to hold.
+3. **Grid preference (FP4 vs NF4) on CMU: the Base-EN-ours reversal is not supported once looping outputs are accounted for.** On MyST (Weeks 8-10), NF4 beats FP4 below 244M (Tiny-EN-ours by 3.90 pp, Base-EN-ours by 2.92 pp, Tiny-EN-Dutta by 44.41 pp) and FP4 narrowly wins at Small-EN and Medium-EN (0.13 and 0.26 pp). On CMU the raw figures first appeared to flip Base-EN-ours (35.39% FP4 vs 40.17% NF4, FP4 ahead by 4.78 pp) and Medium-EN (FP4 ahead by 7.43 pp); after adjustment the gaps are 0.10 pp (NF4 ahead) and 0.28 pp, i.e. ties. NF4's advantage holds for both Tiny checkpoints (4.84 pp raw and 4.87 pp adjusted for Tiny-EN-ours; 881.14 pp raw and 17.98 pp adjusted for Tiny-EN-Dutta). What does not carry over is NF4's 2.92 pp margin for Base-EN-ours, which is absent on CMU. See Week 17.
 
 4. **Parameter-count correction:** direct verification (loading both checkpoints fresh and comparing `sum(p.numel())` plus full architecture config) confirmed Tiny-EN-ours and Tiny-EN-Dutta are *exactly* parameter-for-parameter identical at 37,760,256 params each (encoder_layers=4, decoder_layers=4, d_model=384, 6 attention heads), not merely "within 3%" as approximated in earlier weeks (37.4M/36.4M). The earlier approximate figures have been corrected in place wherever they appeared in this log (e.g. the Week 11-14 magnitude-pruning synthesis table); all "architecturally identical" claims from Weeks 8-15 are strengthened by this exact match.
 
-**Overall:** two of this study's three cross-checked central findings replicate cleanly (and the training-recipe reversal sharpens into a specific, mechanistic explanation); two others (INT8 recipe safety, grid preference) hold as strong majority patterns rather than universal rules once tested on a second corpus. This is itself consistent with this study's broader theme across all 16 weeks: single-scale and now single-corpus compression claims need checking before being trusted as general facts.
+**Overall:** the pruning findings replicate on CMU (Week 17): collapse onset is identical on both corpora for all six checkpoints, the Base-EN-ours vs Tiny-EN-ours reversal under magnitude pruning reappears at 40% and 45%, and Wanda removes it. The training-recipe reversal replicates and sharpens into a specific mechanism (Tiny-EN-Dutta under FP4). Two findings that first looked like corpus differences, INT8 compounding and the FP4/NF4 flip, are largely produced by CMU's short utterances amplifying a few looping outputs, a property of the test set and not of the compression methods. This is consistent with the study's broader theme across all weeks: single-scale and single-corpus compression claims (and small differences on a short-utterance corpus) need checking before being trusted as general facts.
+
+---
+
+
+### ✅ Week 17 | CMU Kids: Magnitude Pruning, Extended Wanda, and Outlier Audit
+
+**Purpose:** Week 16 repeated the quantization, Wanda (10-40%), and combined studies on the CMU Kids corpus [20]. This week completes the pruning side of that cross-corpus comparison, then audits every CMU result for sensitivity to a small number of very long outputs. The audit changes how two Week 16 findings (INT8 compounding, FP4 vs NF4 grid preference) are stated; the corrected statements replace the originals in the Week 16 Key Findings above.
+
+**Scope:** magnitude pruning at 10/20/30/40/45/50% for all 6 fine-tuned checkpoints (36 results) and Wanda pruning at 45% and 50% (12 results) on the CMU Kids test set. The CMU total is now **228 results** = 36 quantization-only + 36 Wanda-only (10-50%) + 36 magnitude (10-50%) + 120 combined (Wanda 10-40%). One configuration (Tiny-EN-ours, INT8 naive + Wanda at 30%) exists as two runs made on different days and gave the identical WER of 41.53% both times, so the pipeline, including Wanda's calibration sampling, is reproducible.
+
+**Protocol (unchanged from Week 16):** CMU Kids test utterances are evaluated individually (1,599 utterances after the 3-word minimum filter, mean duration 6.3 s, mean reference length 8 words); Wanda calibration is taken from MyST training samples (256 samples) [24]; magnitude pruning uses a per-layer threshold [25]; Wanda ranks weights by |weight| x input-activation norm [26]. Scripts: `21_magnitude_pruning_PATCHED.py` (script 21 plus `--test_dir` and `--corpus_tag`, so CMU results are tagged and never mixed with MyST; the pruning functions are byte-identical to the original), `aggregate_cmu_magnitude.py`, and `cmu_outlier_audit.py`.
+
+#### Magnitude Pruning on CMU Kids (WER %)
+
+| Checkpoint | 10% | 20% | 30% | 40% | 45% | 50% |
+|---|---|---|---|---|---|---|
+| Tiny-EN-ours | 39.20% | 39.83% | 55.18% | 185.85% | 1095.33% | 1657.11% |
+| Tiny-EN-Dutta | 29.75% | 92.88% | 2577.08% | 1530.49% | 2935.89% | 947.84% |
+| Base-EN-ours | 34.36% | 33.76% | 47.18% | 369.53% | 2842.98% | 1770.67% |
+| Small-EN | 17.27% | 18.80% | 16.63% | 19.20% | 28.33% | 352.95% |
+| Small-multilingual | 33.93% | 32.60% | 29.30% | 48.68% | 483.11% | 1363.43% |
+| Medium-EN | 20.10% | 24.14% | 22.40% | 71.70% | 844.89% | 100.00% |
+
+#### Wanda Pruning on CMU Kids, 10-50% (WER %)
+
+| Checkpoint | 10% | 20% | 30% | 40% | 45% | 50% |
+|---|---|---|---|---|---|---|
+| Tiny-EN-ours | 38.72% | 37.80% | 40.05% | 60.45% | 83.36% | 174.82% |
+| Tiny-EN-Dutta | 29.32% | 35.04% | 41.98% | 51.23% | 46.74% | 356.59% |
+| Base-EN-ours | 33.47% | 28.62% | 34.10% | 38.61% | 44.59% | 61.82% |
+| Small-EN | 16.80% | 22.44% | 19.47% | 20.06% | 18.23% | 32.46% |
+| Small-multilingual | 33.02% | 24.67% | 29.42% | 31.30% | 50.95% | 62.71% |
+| Medium-EN | 17.30% | 19.53% | 22.16% | 16.61% | 19.70% | 16.68% |
+
+#### Cross-Corpus Comparison with MyST
+
+**Collapse onset is identical on both corpora for all six checkpoints** (first sparsity at which magnitude pruning gives WER above 100%) [25]:
+
+| Checkpoint | MyST | CMU Kids |
+|---|---|---|
+| Tiny-EN-Dutta | 30% | 30% |
+| Tiny-EN-ours | 40% | 40% |
+| Base-EN-ours | 40% | 40% |
+| Small-multilingual | 45% | 45% |
+| Medium-EN | 45% | 45% |
+| Small-EN | 50% | 50% |
+
+**Size reversal under magnitude pruning replicates** (Base-EN-ours is worse than Tiny-EN-ours at 40%, 45%, and 50% on both corpora; the 50% margin on CMU is thin, 1770.67% vs 1657.11%):
+
+| Sparsity | MyST Tiny-EN-ours | MyST Base-EN-ours | CMU Tiny-EN-ours | CMU Base-EN-ours |
+|---|---|---|---|---|
+| 10% | 14.21% | 11.81% | 39.20% | 34.36% |
+| 20% | 14.17% | 12.63% | 39.83% | 33.76% |
+| 30% | 21.27% | 14.24% | 55.18% | 47.18% |
+| 40% | 146.23% | 349.83% | 185.85% | 369.53% |
+| 45% | 395.55% | 750.64% | 1095.33% | 2842.98% |
+| 50% | 421.55% | 731.20% | 1657.11% | 1770.67% |
+
+**Wanda removes the reversal on both corpora** (Base-EN-ours is below Tiny-EN-ours at every one of the six levels) [26]:
+
+| Sparsity | MyST Tiny-EN-ours | MyST Base-EN-ours | CMU Tiny-EN-ours | CMU Base-EN-ours |
+|---|---|---|---|---|
+| 10% | 14.73% | 11.62% | 38.72% | 33.47% |
+| 20% | 14.16% | 11.81% | 37.80% | 28.62% |
+| 30% | 15.07% | 12.49% | 40.05% | 34.10% |
+| 40% | 22.56% | 14.62% | 60.45% | 38.61% |
+| 45% | 36.75% | 18.33% | 83.36% | 44.59% |
+| 50% | 114.12% | 26.65% | 174.82% | 61.82% |
+
+- **Wanda vs magnitude on CMU:** Wanda gives the lower WER in 32 of 36 checkpoint-sparsity pairs, and in all 12 pairs at 45% and 50% (margins from 10.10 to 2,889.15 pp). The four pairs where magnitude pruning is lower are Small-EN at 20%, 30%, 40% (by 3.64, 2.84, 0.86 pp) and Small-multilingual at 30% (by 0.12 pp). Wanda helps where magnitude pruning breaks the model and makes no measurable difference where it does not.
+- **Wanda cliff on CMU:** only the two Tiny checkpoints exceed 100% WER by 50% sparsity (Tiny-EN-ours 174.82%, Tiny-EN-Dutta 356.59%); the other four stay at or below 62.71%. On MyST the same two checkpoints also first exceed 100% at 50% (114.12% and 127.63%).
+- **Medium-EN at 50% magnitude sparsity** scores exactly 100.00% on CMU: every one of the 1,599 predictions is empty (mean predicted length 0 words), the silent failure also seen on MyST (99.99%).
+- **In the collapsed regime, WER is close to output length divided by reference length.** At 45% magnitude sparsity, Tiny-EN-ours emits about 88 words per utterance and Base-EN-ours about 230 against 8 reference words (about 11 and 29 times the reference length; measured WER 1095.33% and 2842.98%; lengths computed on the mismatch files, 1,577 and 1,583 of 1,599 utterances). The longest outputs reach 446 and 499 words. Corpus WER in this regime therefore mostly reflects how many utterances loop, not how badly each one fails; a looping hallucination of this kind is the failure documented for Whisper in [21].
+
+#### Outlier Audit of the CMU Results
+
+**Why it is needed:** CMU Kids test utterances average 8 reference words, so the 1,599 utterances contain only about 12,800 reference words. One utterance that loops to the decoder's length limit (about 450 words) adds up to about 3.5 pp to corpus WER, larger than the 2 pp threshold used elsewhere in this study. `cmu_outlier_audit.py` pairs each CMU result with its predictions file and reports, per run: `n_long` (predictions longer than 50 words), `excess_pp` (excess words in those predictions divided by total reference words) and `wer_adj` = WER - excess_pp. The adjusted value is an **estimate** (raw word counts, insertion excess only, and a 50-word threshold that can miss shorter loops); raw WER remains the reported metric, and the adjusted value is used only to judge whether a difference between two runs is attributable to a few utterances.
+
+**FP16 baselines on CMU Kids:**
+
+| Checkpoint | MyST FP16 | CMU raw | Long outputs | Excess (pp) | CMU adjusted |
+|---|---|---|---|---|---|
+| Tiny-EN-ours | 14.53% | 37.05% | 1 | 0.95 | 36.10% |
+| Tiny-EN-Dutta | 12.06% | 32.94% | 2 | 6.90 | 26.04% |
+| Base-EN-ours | 11.91% | 32.12% | 2 | 3.89 | 28.23% |
+| Small-EN | 9.16% | 18.80% | 1 | 2.73 | 16.07% |
+| Small-multilingual | 9.91% | 37.83% | 8 | 18.28 | 19.55% |
+| Medium-EN | 8.94% | 21.97% | 2 | 6.97 | 15.00% |
+
+Long outputs are a large share of several baselines: 48% of Small-multilingual's 37.83% (8 outputs), 32% of Medium-EN's 21.97%, 21% of Tiny-EN-Dutta's 32.94%. This explains why lightly pruned models sometimes score well below their own FP16 baseline (for example Small-multilingual with Wanda at 20% reaches 24.67% against 37.83%; that pruned run has 2 long outputs against 8 in the baseline). Changes relative to FP16 on CMU are therefore not used as evidence; comparisons are made between compressed variants.
+
+**INT8 naive + Wanda vs Wanda-only:** raw differences exceed 2 pp in 5 of 12 comparisons for the three sub-244M checkpoints (9 of 24 across all six). After adjustment 1 of 12 (1 of 24) remains:
+
+| Checkpoint | Sparsity | Wanda-only | INT8+Wanda | Raw diff (pp) | Adjusted diff (pp) | Extra long outputs |
+|---|---|---|---|---|---|---|
+| Tiny-EN-Dutta | 30% | 41.98% | 46.76% | +4.78 | +0.21 | 2 |
+| Tiny-EN-Dutta | 40% | 51.23% | 72.87% | +21.64 | +2.53 | 5 |
+| Base-EN-ours | 10% | 33.47% | 36.98% | +3.51 | +0.08 | 1 |
+| Base-EN-ours | 20% | 28.62% | 32.02% | +3.40 | +0.00 | 1 |
+| Base-EN-ours | 30% | 34.10% | 39.22% | +5.12 | +0.24 | 3 |
+
+The largest raw increase (Tiny-EN-Dutta, 40%, +21.64 pp) is 5 additional looping outputs (0.3% of the utterances), about 3.8 pp each. INT8 + Wanda nevertheless produces more long outputs than Wanda alone in 12 of the 24 comparisons and fewer in 2 (10 tied; two-sided sign test p = 0.013; the 24 comparisons reuse the same checkpoints and utterances, so the p-value is suggestive only). On MyST the same comparison exceeds 2 pp in none of the 36 cases across the six checkpoints (largest +1.29 pp, Tiny-EN-Dutta at 40%).
+
+**BnB-FP4 vs BnB-NF4 on CMU** (gap = NF4 minus FP4, so a negative gap means NF4 is better; long outputs listed as FP4/NF4):
+
+| Checkpoint | FP4 raw | NF4 raw | Gap (pp) | Long outputs | FP4 adjusted | NF4 adjusted | Adjusted gap (pp) |
+|---|---|---|---|---|---|---|---|
+| Tiny-EN-ours | 52.39% | 47.55% | -4.84 | 3/5 | 45.05% | 40.17% | -4.87 |
+| Tiny-EN-Dutta | 1006.83% | 125.69% | -881.14 | 410/34 | 49.02% | 31.04% | -17.98 |
+| Base-EN-ours | 35.39% | 40.17% | +4.78 | 4/3 | 29.99% | 29.89% | -0.10 |
+| Small-EN | 16.07% | 16.47% | +0.40 | 0/0 | 16.07% | 16.47% | +0.40 |
+| Small-multilingual | 30.26% | 32.40% | +2.14 | 6/8 | 19.65% | 20.18% | +0.53 |
+| Medium-EN | 17.96% | 25.39% | +7.43 | 3/3 | 15.27% | 14.99% | -0.28 |
+
+NF4's advantage holds for both Tiny checkpoints. The raw CMU figures appeared to reverse the MyST result for Base-EN-ours (FP4 ahead by 4.78 pp) and Medium-EN (7.43 pp), but the adjusted gaps are 0.10 and 0.28 pp, i.e. ties. The Tiny-EN-Dutta collapse under FP4 is not an outlier effect: BnB-FP4 produces 410 long outputs (25.6% of the test set) against 3 for Tiny-EN-ours, and NF4 stays ahead by 17.98 pp after adjustment.
+
+#### Week 17 Key Findings
+
+1. **Collapse onset under magnitude pruning is identical on MyST and CMU Kids for all six checkpoints** (Tiny-EN-Dutta 30%, Tiny-EN-ours and Base-EN-ours 40%, Small-multilingual and Medium-EN 45%, Small-EN 50%) [25].
+2. **The Base-EN-ours vs Tiny-EN-ours size reversal under magnitude pruning replicates on CMU** (40% and 45%; thin at 50%), and **Wanda removes it on both corpora** at every sparsity tested [26].
+3. **Wanda beats magnitude pruning wherever magnitude pruning collapses** (12 of 12 pairs at 45% and 50%, 32 of 36 overall); the four exceptions are all Small-EN or Small-multilingual at light sparsity, by at most 3.64 pp.
+4. **CMU FP16 baselines are inflated by a few looping outputs** (Small-multilingual: 8 outputs account for 18.28 of its 37.83 points). After adjustment the baselines run from 36.10% (Tiny-EN-ours) to 15.00% (Medium-EN).
+5. **INT8 "compounding" on CMU is mostly 1 to 5 extra looping outputs.** Raw 5 of 12 falls to 1 of 12 after adjustment (Tiny-EN-Dutta at 40%, +2.53 pp); INT8 still adds long outputs more often than not (12 of 24 vs 2).
+6. **The FP4 vs NF4 flip for Base-EN-ours on CMU is not supported:** the adjusted gap is 0.10 pp. NF4's 2.92 pp advantage for Base-EN-ours on MyST does not appear on CMU, where the two are tied.
+7. **The Tiny-EN-Dutta FP4 collapse is a large effect on both corpora** (MyST BnB-FP4 58.82% vs 20.50% for Tiny-EN-ours, FP4 naive 287.25% vs 30.96%; CMU 1006.83% vs 52.39% and 3168.67% vs 68.67%).
+8. **Methodological point:** on a test set of short utterances, corpus WER is dominated by a handful of hallucinated outputs whenever a compressed model loops; thresholds of a few pp taken from a longer-utterance corpus do not transfer, while large effects (pruning cliffs, the FP4 collapse) are unaffected.
 
 ---
 
@@ -2704,10 +2859,12 @@ The four-bit comparison remains favorable to NF4 in both paper groups:
 | Week 3 | Dataset composition independently re-verified via direct file scanning (`23_dataset_filtering_report.py`), cross-checked against `preprocess_myst.py`'s actual filtering/concatenation logic. Five-point consistency check confirms zero content loss or cross-session merging through concatenation. | ✅ Done |
 | Week 4-6 | Vanilla (non-fine-tuned) Whisper PTQ across the full model family (Tiny.en through Large-v3, 39M-1,550M params, 10 models, ~22 methods per small model). Headline finding: quantization stability at 769M is not capacity alone but capacity × English-only training interacting - Medium.en is the only model in the study with zero collapses across every method tested. Nine findings total, including grid-shape protection limits at small scale and an outlier-severity continuum between Large-v2/v3. | ✅ Done |
 | Week 7 | Self-fine-tuned tiny.en (39M) and base.en (74M) on the same `data/filtered` pipeline used throughout this study, avoiding the training-data confound of using an external, differently-filtered checkpoint. Both establish clean, monotonically-scaling FP16 baselines (14.53% and 11.91% respectively) consistent with the three externally-trained variants. | ✅ Done |
-| Week 8-10 | Comprehensive PTQ for fine-tuned models across all five checkpoints (Small-EN, Medium-EN, Small-multilingual, Tiny-EN-ours, Base-EN pending, plus SatwikDutta's externally-trained Tiny-EN for a training-recipe comparison). BnB FP4 Medium-EN (8.93%) matches paper at 69.2% smaller size. K-means codebooks: fail on EN fine-tuned models at small scale, succeed at k=256 on Medium-EN and Small-multilingual. Tiny-EN quantization reveals percentile clipping becomes catastrophic even at 8-bit, and grid preference (FP4 vs NF4) reverses at 39M scale. | ✅ Done |
-| Week 11-14 | Magnitude pruning (per-layer, corrected pipeline protocol) COMPLETE across all 3 variants (10-50%, 5% steps): universal ~40% cliff regardless of capacity or language, contradicting quantization Rules 8/11. Wanda pruning (activation-aware importance) relocates the cliff from 40-45% to 55-60%, a ~15-point sparsity extension rather than elimination - a more nuanced finding than initially suspected before extending the sweep past 50%. | ✅ Done |
-| Week 15 | Combined pruning + quantization across all 3 variants, 5 sparsity levels, 3 methods (45 combinations total). Reveals genuinely variant-and-method-dependent interaction patterns (synergy/neutral/compounding) rather than a single universal rule, plus a real implementation asymmetry: naive/pct quantization methods orphan Whisper's tied input/output embedding, while bitsandbytes' loading-time integration does not. | ✅ Done |
-| Week 16 | Cross-corpus validation on CMU Kids (licensed dataset, all 6 checkpoints, 180 results: quantization, Wanda pruning, combined). Training-recipe reversal replicates and sharpens into a mechanistic finding (decoder repetition-loop amplification). Two other central findings (INT8 recipe safety, FP4/NF4 grid preference) hold as strong majority patterns rather than universal rules once tested on a second corpus. Parameter-count correction: Tiny-EN-ours/Dutta confirmed exactly identical (37.76M each), not merely "within 3%". | ✅ Done |
+| Week 8-10 | Comprehensive PTQ for fine-tuned models across all six checkpoints (Small-EN, Medium-EN, Small-multilingual, Tiny-EN-ours, Base-EN-ours, plus SatwikDutta's externally-trained Tiny-EN for a training-recipe comparison [19]). BnB FP4 Medium-EN (8.93%) matches paper at 69.2% smaller size. K-means codebooks: k=16 collapses the four English-only checkpoints up to 244M and k=32 collapses Small-EN, while k=256 stays within 1.5 pp of FP16 on five of six checkpoints. Percentile clipping is catastrophic on Tiny-EN even at 8-bit. NF4 beats FP4 at every checkpoint below 244M; Tiny-EN-Dutta collapses under the FP4 formats (BnB FP4 58.82%, FP4 naive 287.25%) while matching Tiny-EN-ours elsewhere. | ✅ Done |
+| Week 11-14 | Magnitude pruning (per-layer threshold [25]) and Wanda pruning (activation-aware importance [26]) complete across all six checkpoints (10-50%, 5% steps). Magnitude cliff onset ranges from 10-20% (Tiny-EN-Dutta) to 30-40% (Small-EN, Small-multilingual, Medium-EN), and Base-EN-ours degrades more than Tiny-EN-ours from 40%. Wanda relocates the cliff for the three larger checkpoints to 50-60% and removes the Base-EN-ours collapse (750.64% to 18.33% at 45%, a rescue of 732.31 pp). | ✅ Done |
+| Week 15 | Combined Wanda pruning + quantization, 228 configurations: four English-only checkpoints x seven methods x six sparsities (168, the paper subset) plus Tiny-EN-Dutta and Small-multilingual x five methods x six sparsities (60). Interaction is checkpoint- and method-dependent: INT8 naive and BnB-INT8 never compound across the paper subset, BnB NF4 is the best 4-bit method, and BnB FP4 on Tiny-EN-Dutta compounds severely at all six sparsities. Documented: naive/pct quantization orphans Whisper's tied input/output embedding while bitsandbytes does not; operating points under a +2 pp budget (57-79% theoretical reduction) and a repetition-loop audit of the failures. | ✅ Done |
+| Week 16 | Cross-corpus validation on CMU Kids [20] (licensed dataset, all 6 checkpoints): quantization, Wanda pruning (10-40%), and combined settings, 180 results in the initial batch. The training-recipe reversal replicates and sharpens into a mechanistic finding (decoder repetition-loop amplification). Parameter-count correction: Tiny-EN-ours/Dutta confirmed exactly identical (37.76M each). The INT8-compounding and FP4/NF4 findings are restated after the Week 17 audit. | ✅ Done |
+| Week 17 | CMU Kids: magnitude pruning (36 results) and Wanda at 45% and 50% (12 results), 228 CMU results in total. Collapse onset is identical on both corpora for all six checkpoints; the Base-EN-ours vs Tiny-EN-ours reversal under magnitude pruning replicates and Wanda removes it on both. Outlier audit: CMU utterances average 8 words, so one looping output adds up to about 3.5 pp; raw CMU baselines are inflated (8 long outputs are 48% of Small-multilingual's 37.83%), INT8 compounding falls from 5 of 12 comparisons to 1 of 12, and the FP4/NF4 flip for Base-EN-ours becomes a tie. | ✅ Done |
+| Paper | Compression Robustness of Whisper Models for Children's Speech ASR submitted to ICASSP 2027 (four English-only checkpoints; quantization, magnitude and Wanda pruning, combined compression; MyST only). | ✅ Submitted |
 
 ---
 
@@ -2716,7 +2873,7 @@ The four-bit comparison remains favorable to NF4 in both paper groups:
 | # | Citation |
 |---|---|
 | [1] | Attia, A. A., Liu, J., Ai, W., Demszky, D., & Espy-Wilson, C. (2024). *KID-Whisper: Towards Bridging the Performance Gap in ASR for Children VS. Adults.* arXiv:2309.07927. |
-| [2] | Fan, R., Zheng, R., & Alwan, A. (2024). *Benchmarking Children's ASR with Supervised and Self-supervised Speech Foundation Models.* Interspeech 2024. arXiv:2406.10507. |
+| [2] | Fan, R., Balaji Shankar, N., & Alwan, A. (2024). *Benchmarking Children's ASR with Supervised and Self-supervised Speech Foundation Models.* Interspeech 2024. arXiv:2406.10507. |
 | [3] | Conneau, A., et al. (2021). *Unsupervised Cross-lingual Representation Learning for Speech Recognition.* Interspeech 2021. arXiv:2006.13979. |
 | [4] | Babu, A., et al. (2022). *XLS-R: Self-supervised Cross-lingual Speech Representation Learning at Scale.* Interspeech 2022. arXiv:2111.09296. |
 | [5] | Ardila, R., et al. (2020). *Common Voice: A Massively-Multilingual Speech Corpus.* LREC 2020. |
@@ -2739,3 +2896,5 @@ The four-bit comparison remains favorable to NF4 in both paper groups:
 | [22] | Ginjala, S., Fosler-Lussier, E., Myers, C. W., & Parthasarathy, S. (2026). *Do LLM Decoders Listen Fairly? Benchmarking How Language Model Priors Shape Bias in Speech Recognition.* arXiv:2604.21276. |
 | [23] | Han, S., Mao, H., & Dally, W. J. (2016). *Deep Compression: Compressing Deep Neural Networks with Pruning, Trained Quantization and Huffman Coding.* ICLR 2016. |
 | [24] | Williams, M., & Aletras, N. (2024). *On the Impact of Calibration Data in Post-training Quantization and Pruning.* ACL 2024. arXiv:2311.09755. |
+| [25] | Han, S., Pool, J., Tran, J., & Dally, W. J. (2015). *Learning Both Weights and Connections for Efficient Neural Networks.* NeurIPS 2015. |
+| [26] | Sun, M., Liu, Z., Bair, A., & Kolter, J. Z. (2024). *A Simple and Effective Pruning Approach for Large Language Models.* ICLR 2024. arXiv:2306.11695. |
