@@ -2847,6 +2847,375 @@ NF4's advantage holds for both Tiny checkpoints. The raw CMU figures appeared to
 7. **The Tiny-EN-Dutta FP4 collapse is a large effect on both corpora** (MyST BnB-FP4 58.82% vs 20.50% for Tiny-EN-ours, FP4 naive 287.25% vs 30.96%; CMU 1006.83% vs 52.39% and 3168.67% vs 68.67%).
 8. **Methodological point:** on a test set of short utterances, corpus WER is dominated by a handful of hallucinated outputs whenever a compressed model loops; thresholds of a few pp taken from a longer-utterance corpus do not transfer, while large effects (pruning cliffs, the FP4 collapse) are unaffected.
 
+### ✅ Week 18 | CMU Kids: Training on CMU and Repeating the Compression Study
+
+**Purpose:** Weeks 16 and 17 evaluated MyST-trained checkpoints on CMU Kids [20], so every CMU number mixed a domain gap with the effect of compression. Week 18 removes the domain gap: Whisper tiny.en, base.en and small.en are fine-tuned on CMU Kids itself, and the quantization, magnitude-pruning, Wanda and combined studies are repeated on them. The Week 16 and 17 results are unchanged and remain the zero-shot-transfer experiment; Week 18 is a separate experiment with its own split, its own checkpoints and its own result tag.
+
+**Scope:** 3 CMU-trained checkpoints, 114 compressed-model results (33 quantization-only, 18 magnitude, 18 Wanda, 45 combined) plus 12 FP16 evaluations (untuned Whisper, MyST-trained, CMU-trained, and the CMU-trained models on the unseen-speaker subset). Combined runs use sparsity 30%, 40% and 50% with five quantization methods.
+
+#### Why the Corpus Split Had to Be Rebuilt
+
+The Kaldi recipe that ships with the corpus splits **utterances, not sentences**. Measured with `inspect_cmu_split.py`: 98.4% of the test text also occurs in the training set, and 75 of the 76 test speakers also appear in training. CMU Kids has only about 340 distinct prompts, so a model trained on that split can reach a low test WER by recalling prompt text, which says nothing about generalisation [20]. The archive also contains the CSLU Kids data, which is not used.
+
+`make_cmu_split.py` builds a **sentence-disjoint** split. Utterances that share a prompt code or a normalised transcript are merged into one group (union-find), and whole groups are assigned to test (25%), dev (8%) or train. Ten gender-balanced speakers (five female, five male) are held out entirely: their utterances are removed from train and dev, and their test utterances form the `test_unseen_spk` subset. The script asserts that no transcript, prompt code or utterance id is shared across train, dev and test, and that no held-out speaker appears in train or dev.
+
+| Split | Utterances | Words | Speakers | Distinct sentences |
+|---|---|---|---|---|
+| Train | 2,893 | 23,373 | 66 | 234 |
+| Dev | 359 | 2,424 | 64 | 24 |
+| Test | 1,320 | 10,395 | 75 | 96 |
+| Test, unseen speakers (subset of test) | 196 | 1,505 | 10 | 59 |
+
+Pool: 5,180 utterances, 41 dropped by the 3-word minimum, 5,139 usable, in 355 groups (largest group 44 utterances, 0.9% of the pool). 567 utterances of the held-out speakers that fall in train or dev groups are unused. Held-out speakers: fadf, fajb, farg, fnjs, fsxe, mcjd, mjmc, mlss, mmbg, msjd. On the test set, one 450-word looping output adds about 4.3 pp to corpus WER; on the unseen-speaker subset it adds about 29.9 pp.
+
+#### Fine-Tuning
+
+Recipe (`26_finetune_whisper_cmu.py`, Hugging Face `Seq2SeqTrainer`, Whisper [10]): effective batch 16, learning rate 1e-5, 100 warm-up steps, seed 42, evaluation four times per epoch, early stopping with patience 8 evaluations. tiny.en and base.en use batch 16; small.en uses batch 4 with 4 gradient-accumulation steps and gradient checkpointing to fit a 7.6 GiB GPU. The recipe was fixed on the dev set alone; the test set was not evaluated until the recipe was final.
+
+The checkpoint is **selected by dev loss, not dev WER**. The dev set contains only 24 distinct sentences, so dev WER moves by whole points when a single utterance loops, while dev loss is smooth. All three models reach their lowest dev loss at epoch 0.75 (about step 135 of 181 per epoch) and overfit afterwards: training stops by early stopping at about epoch 2.76.
+
+| Checkpoint | Zero-shot dev WER | Best dev loss (epoch 0.75) | Dev WER at best loss | Dev loss at stop (epoch 2.76) | Dev WER at stop |
+|---|---|---|---|---|---|
+| tiny.en (39M) | 30.26% | 0.5910 | 16.56% | 0.7153 | 32.00% |
+| base.en (74M) | 20.19% | 0.4945 | 13.63% | 0.5929 | 18.37% |
+| small.en (244M) | 13.38% | 0.4806 | 11.89% | 0.5996 | 15.90% |
+
+Models: `kid-whisper-{tiny,base,small}-en-cmu-ours`. Dev WER here is a training-time metric used for early stopping only.
+
+#### Baselines on the Sentence-Disjoint Test Set
+
+All rows use FP16, beam 5, the Whisper English normaliser [10] and the same decoding as every other result in this study. Long outputs are predictions of more than 50 words; the adjusted WER subtracts their estimated contribution (an estimate, not a recomputed WER).
+
+| Model | Training data | Raw WER | Long outputs | Excess (pp) | Adjusted WER |
+|---|---|---|---|---|---|
+| whisper-tiny.en | none (zero-shot) | 33.49% | 5 | 13.76 | 19.73% |
+| Tiny-EN-ours | MyST | 47.99% | 5 | 12.82 | 35.17% |
+| **Tiny-EN-CMU** | **CMU train** | 40.17% | 7 | 26.46 | **13.71%** |
+| whisper-base.en | none (zero-shot) | 19.99% | 0 | 0.00 | 19.99% |
+| Base-EN-ours | MyST | 40.15% | 4 | 13.22 | 26.93% |
+| **Base-EN-CMU** | **CMU train** | 40.24% | 7 | 28.64 | **11.60%** |
+| whisper-small.en | none (zero-shot) | 21.57% | 2 | 6.92 | 14.65% |
+| KID-Whisper Small-EN [1] | MyST | 18.39% | 1 | 2.96 | 15.43% |
+| **Small-EN-CMU** | **CMU train** | 24.70% | 4 | 14.16 | **10.54%** |
+
+- **Raw WER misleads in both directions.** Fine-tuning on CMU improves the adjusted WER over the untuned model by 6.02 pp (Tiny), 8.39 pp (Base) and 4.11 pp (Small), yet the raw WER of the fine-tuned models is higher (40.17% vs 33.49%, 40.24% vs 19.99%, 24.70% vs 21.57%) because they produce more looping outputs (7, 7, 4 vs 5, 0, 2). Fine-tuning on 2,893 short utterances makes repetition-loop hallucination [21] more likely; the 7 long outputs of CMU-trained Base account for 28.64 of its 40.24 points.
+- **MyST-trained models transfer worse than the untuned models** on adjusted WER for Tiny (35.17% vs 19.73%) and Base (26.93% vs 19.99%), and slightly worse for Small (15.43% vs 14.65%). The MyST fine-tuning does not help on read-aloud child speech with a different recording setup, consistent with the Week 16 finding that CMU is a hard transfer target.
+
+**Unseen speakers** (CMU-trained models, FP16, 196 utterances from 10 held-out speakers): Tiny 24.27% raw (1 long output, adjusted 16.36%), Base 63.79% raw (2 long outputs, adjusted 12.56%), Small 13.06% raw (0 long outputs, adjusted 13.06%). Against the full test set (adjusted 13.71%, 11.60%, 10.54%) the unseen speakers add 2.65, 0.96 and 2.52 pp. The subset is small (59 sentences, one 450-word loop adds 29.9 pp) and was not bootstrapped, so this is a descriptive comparison of adjusted WER only.
+
+#### Statistics Used for the Compression Results
+
+Every compression result is compared with the FP16 model of the same size on the same test utterances.
+
+- **Adjusted change** = adjusted WER of the run minus adjusted WER of the FP16 baseline.
+- **Interval:** a paired percentile bootstrap (2,000 resamples) [27, 28] in which **whole sentences** are resampled (96 units). The same resamples are used for the run and its baseline. `ns` means the 95% interval contains 0.
+- **Why sentences:** the 1,320 test utterances come from only 96 sentences, each read by many children, so resampling single utterances treats correlated readings as independent. For the Tiny baseline the 95% interval of the adjusted WER is 12.63 to 14.83 with utterance resampling, 11.99 to 15.78 with speaker resampling and 11.40 to 16.12 with sentence resampling; sentence resampling is used throughout. Intervals still ignore variation between training runs.
+- `*` marks rows with hundreds of long outputs (100 or more), where the loop correction is itself unreliable; read them as breakdown.
+- The cell values in the summary tables are the adjusted change in pp with the number of long outputs in parentheses; the baselines have 7 (Tiny), 7 (Base) and 4 (Small).
+
+Scripts: `aggregate_cmu_sd.py`, `bootstrap_cmu_sd.py` (`--cluster sentence`) and `build_cmu_tables.py`. Wanda calibration (256 samples, seed 42 [26]) uses the CMU **train** split, so the calibration data matches the training domain [24]; `22_wanda_pruning_PATCHED.py` and `24_combined_pruning_quantization_PATCHED.py` take `--calib_dir` and refuse to calibrate on the evaluation set.
+
+#### Post-Training Quantization (adjusted change vs FP16, pp; long outputs in parentheses)
+
+| Method | Bits | Tiny | Base | Small |
+|---|---|---|---|---|
+| INT8 naive | 8 | +0.80 ns (9) | +0.11 ns (10) | -0.07 ns (1) |
+| FP8 naive | 8 | -0.15 ns (5) | +0.09 ns (10) | +0.04 ns (4) |
+| BnB INT8 | 8 | -0.19 ns (7) | +0.14 ns (9) | -0.03 ns (3) |
+| BnB NF4 | 4 | +0.83 (11) | +0.36 ns (4) | +0.19 ns (0) |
+| BnB FP4 | 4 | +3.75 (13) | +2.95 (4) | +0.23 ns (2) |
+| FP4 naive | 4 | +12.19 (39) | +7.08 (35) | +2.00 (11) |
+| INT8 percentile | 8 | +2.31 (43) | +7.34 (39) | +2.48 (21) |
+| FP8 percentile | 8 | +2.42 (43) | +5.37 (39) | +2.83 (19) |
+| FP4 percentile | 4 | +9.66 (55) | +9.29 (61) | +4.67 (26) |
+| INT4 percentile | 4 | +48.00 * (1034) | +13.18 ns * (236) | +7.01 (55) |
+| INT4 naive | 4 | +339.52 * (551) | +56.22 * (471) | +21.18 (38) |
+
+- **8-bit is lossless at every size:** all nine 8-bit runs (INT8 naive, FP8 naive, BnB INT8 [13] on three models) have intervals that contain 0.
+- **BnB NF4 [14]:** +0.83 pp on Tiny (interval +0.12 to +1.51, measurable), +0.36 on Base (ns) and +0.19 on Small (ns). The cost shrinks with model size. BnB FP4 is measurably worse on Tiny (+3.75) and Base (+2.95, interval +0.42 to +8.22) and not on Small (+0.23, ns).
+- **Naive 4-bit and percentile clipping fail.** FP4 naive costs +12.19, +7.08 and +2.00 pp; percentile clipping [17] is measurably worse at every size and for every bit-width except Base INT4 percentile, whose interval is too wide to judge. INT8 percentile costs +2.31, +7.34 and +2.48 pp (raw 170.76%, 142.03% and 77.57%, with 43, 39 and 21 long outputs). INT4 naive produces 551, 471 and 38 long outputs.
+
+#### Magnitude Pruning (adjusted change vs FP16, pp)
+
+| Sparsity | Tiny | Base | Small |
+|---|---|---|---|
+| 10% | +0.33 (6) | +0.06 ns (8) | +0.16 ns (3) |
+| 20% | +0.51 ns (5) | +0.09 ns (10) | -0.18 ns (0) |
+| 30% | +1.84 (21) | +0.65 ns (4) | -0.70 (2) |
+| 40% | +6.67 ns * (130) | +0.84 ns (47) | +0.06 ns (6) |
+| 45% | +78.39 * (407) | +55.84 * (527) | +1.91 (13) |
+| 50% | +319.09 * (380) | +59.91 * (1207) | +9.49 (60) |
+
+- **Collapse onset (first sparsity with raw WER above 100%) is 40% for Tiny, 40% for Base and 50% for Small, identical to the MyST-trained Tiny-EN-ours, Base-EN-ours and Small-EN in Week 17** [25].
+- **Usable range in adjusted WER:** Tiny is +0.33 at 10% (interval +0.02 to +0.67), unchanged at 20% and measurably worse from 30% (+1.84); Base is unchanged up to 30% (ns) but at 40% already has 47 long outputs against 7 (raw 141.81%), so its adjusted value of +0.84 has an interval of -9.68 to +9.37 and says nothing; Small shows no degradation up to 40% and is measurably worse from 45% (+1.91, interval +0.02 to +4.70). Small at 30% is 0.70 pp better than FP16 (interval -1.42 to -0.03); with 2 long outputs against 4 this is within what loop variation produces, and the result is reported as no degradation, not as an improvement.
+- An operating point therefore needs two conditions: adjusted WER near the baseline **and** a long-output count near the baseline.
+
+#### Wanda Pruning (adjusted change vs FP16, pp)
+
+| Sparsity | Tiny | Base | Small |
+|---|---|---|---|
+| 10% | -0.04 ns (6) | +0.29 ns (9) | +0.05 ns (3) |
+| 20% | +0.02 ns (6) | +0.39 (9) | +0.12 ns (2) |
+| 30% | +0.77 (5) | +0.72 (9) | +0.22 ns (3) |
+| 40% | +3.29 (9) | +1.08 (12) | +0.60 ns (1) |
+| 45% | +5.31 (16) | +3.89 (9) | +1.16 ns (4) |
+| 50% | +14.39 (37) | +3.77 (8) | +1.55 (1) |
+
+- **No cliff in adjusted WER, and loops stay near baseline.** Base has 8 to 12 long outputs at every level up to 50% and Small has 1 to 4, against 7 and 4 at baseline. Tiny rises from 5 at 30% to 37 at 50% [26].
+- **Usable range:** Tiny is unchanged at 10 and 20% and measurably worse from 30% (+0.77, interval +0.22 to +1.32), reaching +14.39 at 50% (raw 134.87%, the only Wanda run above 100%, as for Tiny-EN-ours on MyST). Base is measurably worse from 20% (+0.39, lower bound +0.01), +3.77 at 50%. Small is unchanged up to 45% (+1.16, interval -0.12 to +2.69) and worse at 50% (+1.55).
+- **Wanda vs magnitude (adjusted WER):** Wanda is lower in 11 of 18 pairs, including all six at 45% and 50% (by 0.75 to 304.70 pp). The seven pairs where magnitude pruning is lower are Base at 10 to 40% and Small at 20 to 40%, by at most 0.92 pp.
+- **Size ordering (Base vs Tiny).** Under magnitude pruning the raw WER of Base is above Tiny at 45% (1494.79% vs 828.56%) and 50% (5043.16% vs 608.70%) but below it at 40% (141.81% vs 375.61%), so the MyST reversal at 40% does not reproduce in the CMU-trained pair; at 45% and 50% it is driven by loop counts (527 and 1,207 long outputs for Base, 407 and 380 for Tiny). In adjusted WER Base is ahead of Tiny at every sparsity under both methods (for Wanda 11.90 to 15.49 vs 13.67 to 28.10, with the 45% and 50% magnitude values unreliable).
+
+#### Combined Wanda Pruning + Quantization (adjusted change vs FP16, pp; long outputs in parentheses)
+
+| Quantization | Sparsity | Tiny | Base | Small |
+|---|---|---|---|---|
+| INT8 naive | 30% | +0.97 (6) | +0.62 (7) | +0.33 ns (1) |
+| INT8 naive | 40% | +2.99 (11) | +1.24 (16) | +0.53 ns (1) |
+| INT8 naive | 50% | +14.37 (40) | +3.95 (8) | +1.31 (1) |
+| FP8 naive | 30% | +0.88 (3) | +0.64 (6) | +0.40 ns (1) |
+| FP8 naive | 40% | +3.37 (10) | +1.24 (11) | +0.53 ns (3) |
+| FP8 naive | 50% | +15.92 (28) | +3.92 (9) | +1.58 (2) |
+| BnB NF4 | 30% | +2.32 (6) | +1.77 (10) | +0.42 ns (1) |
+| BnB NF4 | 40% | +6.63 (15) | +1.66 (13) | +0.77 ns (2) |
+| BnB NF4 | 50% | +16.25 (39) | +5.30 (17) | +1.98 (4) |
+| BnB FP4 | 30% | +5.22 (4) | +2.31 (8) | +0.86 ns (0) |
+| BnB FP4 | 40% | +9.16 (19) | -1.80 ns (12) | +0.97 ns (2) |
+| BnB FP4 | 50% | +23.20 (89) | +5.89 (12) | +2.51 (4) |
+| FP4 naive | 30% | +9.79 (35) | +5.69 (22) | +2.26 (10) |
+| FP4 naive | 40% | +14.09 (42) | +5.53 (36) | +3.49 (6) |
+| FP4 naive | 50% | +53.29 * (196) | +12.95 (38) | +4.91 (8) |
+
+Cost of the quantization step on top of Wanda alone (adjusted WER of combined minus Wanda alone at the same sparsity, 30% / 40% / 50%):
+
+| Quantization | Tiny | Base | Small |
+|---|---|---|---|
+| INT8 naive | +0.20 / -0.30 / -0.02 | -0.09 / +0.17 / +0.18 | +0.11 / -0.07 / -0.24 |
+| FP8 naive | +0.11 / +0.08 / +1.53 | -0.08 / +0.16 / +0.14 | +0.17 / -0.07 / +0.02 |
+| BnB NF4 | +1.55 / +3.34 / +1.86 | +1.05 / +0.58 / +1.53 | +0.20 / +0.18 / +0.42 |
+| BnB FP4 | +4.45 / +5.87 / +8.81 | +1.60 / -2.89 / +2.12 | +0.64 / +0.38 / +0.95 |
+| FP4 naive | +9.02 / +10.80 / +38.90 | +4.97 / +4.45 / +9.18 | +2.04 / +2.89 / +3.36 |
+
+- **8-bit stacks on Wanda at no cost** (within 0.3 pp on all models except Tiny FP8 at 50%, +1.53); BnB NF4 adds 0.2 to 0.4 pp on Small, 0.6 to 1.5 on Base and 1.6 to 3.3 on Tiny; BnB FP4 and FP4 naive add more.
+- **Against FP16:** on Small, every 8-bit, NF4 and BnB FP4 combination at 30% and 40% sparsity has an interval that contains 0 (upper bounds run from +0.99 for FP8 at 30% to +2.20 for BnB FP4 at 40%). On Tiny and Base every combined run is measurably worse than FP16 (the Base BnB FP4 run below is the one exception, and it is an artifact), by 0.62 to 0.97 pp for the 8-bit runs at 30%.
+- The Base BnB FP4 + Wanda 40% value of 9.80% adjusted (-1.80 pp, interval -12.36 to +3.26, 12 long outputs, raw 45.38%) is an artifact of the correction, not a gain, and is excluded from the operating points.
+
+#### Operating Points
+
+Two criteria, both requiring a reliable adjusted estimate (not `*`), at most twice the baseline's long outputs, and an interval no wider than 5 pp: (a) the most compressed configuration (smallest theoretical size) with an adjusted change of at most +2 pp, the convention used for MyST in Week 15; (b) the most compressed configuration whose interval contains 0. Theoretical size assumes every weight at its stated bit-width plus a 1-bit-per-weight mask for pruned layers; stored size is the checkpoint that was actually evaluated.
+
+| Checkpoint | Criterion | Configuration | Adjusted WER | Change vs FP16 [95% CI] | Long outputs | Theoretical size (MB) | Reduction | Stored size (MB) |
+|---|---|---|---|---|---|---|---|---|
+| Tiny-EN-CMU | within +2 pp | BnB NF4 | 14.54% | +0.83 [+0.12, +1.51] | 11 | 18.0 | 75.0% | 48.4 |
+| Tiny-EN-CMU | no measurable loss | BnB INT8 | 13.52% | -0.19 [-0.39, +0.00] ns | 7 | 36.0 | 50.0% | 56.3 |
+| Base-EN-CMU | within +2 pp | BnB NF4 + Wanda 0.40 | 13.26% | +1.66 [+0.56, +2.69] | 13 | 32.5 | 76.5% | 75.5 |
+| Base-EN-CMU | no measurable loss | BnB NF4 | 11.96% | +0.36 [-0.12, +0.86] ns | 4 | 34.6 | 75.0% | 75.5 |
+| Small-EN-CMU | within +2 pp | BnB NF4 + Wanda 0.50 | 12.52% | +1.98 [+0.89, +3.10] | 4 | 92.2 | 80.0% | 177.6 |
+| Small-EN-CMU | no measurable loss | BnB NF4 + Wanda 0.40 | 11.31% | +0.77 [-0.18, +1.81] ns | 2 | 103.6 | 77.5% | 177.6 |
+
+At the same size as the Tiny "no measurable loss" entry, INT8 naive (+0.80, ns) and FP8 naive (-0.15, ns) also qualify. Base reaches 76.5% with Wanda 40% + NF4 for +1.66 pp, only 1.5 percentage points of reduction more than NF4 alone (75.0%, +0.36 pp). Pruning without quantization stays below 45% theoretical reduction: within +2 pp it reaches Wanda 30% on Tiny (55.5 MB, 22.9% smaller, +0.77), Wanda 40% on Base (93.2 MB, 32.7% smaller, +1.08) and Wanda 50% on Small (262.4 MB, 43.1% smaller, +1.55); Small at Wanda 45% (285.4 MB, 38.1% smaller, +1.16) is the only one of these whose interval contains 0.
+
+**Storage caveats.**
+- **A bitmask is expensive next to 4-bit weights.** A 1-bit mask adds 25% to a 4-bit weight, so pruning combined with 4-bit reduces size by a meaningful amount only from 40% sparsity [23]: at 30% the combined size is 19.0 MB (Tiny), 35.8 MB (Base) and 115.0 MB (Small) against 18.0, 34.6 and 115.3 MB for NF4 alone; at 40% it is 17.3, 32.5 and 103.6 MB.
+- **Stored size is far above theoretical size for BnB.** The stored BnB NF4 checkpoints are 48.4, 75.5 and 177.6 MB against 18.0, 34.6 and 115.3 MB theoretical, i.e. 32.8%, 45.5% and 61.5% smaller than FP16 rather than 75.0%. This is consistent with the token embedding (about 19.9M parameters, 38.0 MB in FP16 for Tiny) staying in FP16 and with zeros being stored densely. Naive and percentile quantization are simulated, so their stored size equals the FP16 size.
+
+#### Week 18 Key Findings
+
+1. **The shipped Kaldi split leaks:** 98.4% of the test text occurs in training and 75 of 76 test speakers appear in training [20]. A sentence-disjoint split (96 test sentences, 59 of them from 10 unseen speakers) is needed before a CMU-trained model can be evaluated.
+2. **Fine-tuning on CMU helps the adjusted WER by 4.1 to 8.4 pp over the untuned model, but raises raw WER**, because 2,893 short training utterances make looping outputs more likely (Base: 0 to 7 long outputs) [21]. The MyST-trained checkpoints transfer worse than the untuned ones.
+3. **The best dev loss occurs at epoch 0.75 for all three sizes** and every model overfits afterwards (dev WER of tiny.en 16.56% at the best loss, 32.00% at stop).
+4. **8-bit quantization is lossless at every size** (nine of nine intervals contain 0); **BnB NF4 costs 0.83, 0.36 and 0.19 pp** on Tiny, Base and Small; **BnB FP4 is measurable on Tiny and Base only**; naive 4-bit and percentile clipping fail at every size [13, 14, 17].
+5. **Magnitude-pruning collapse onset is identical to MyST** (Tiny 40%, Base 40%, Small 50%) [25], and an operating point needs both a near-baseline adjusted WER and a near-baseline long-output count (Base at 40% fails the second).
+6. **Wanda has no cliff** and keeps loops near baseline; it beats magnitude pruning wherever magnitude pruning collapses (all six pairs at 45% and 50%) and is not better at light sparsity on Base and Small [26].
+7. **The MyST size reversal at 40% does not reproduce** in the CMU-trained pair; raw reversals at 45% and 50% reflect Base's loop counts, and Base is ahead of Tiny in adjusted WER at every level under both methods.
+8. **Combined compression:** 8-bit adds no measurable cost to Wanda; NF4 cost shrinks with size (Tiny +1.6 to +3.3, Small +0.2 to +0.4 pp at 30 to 50%); Small tolerates Wanda 40% + NF4 with an interval containing 0 (103.6 MB, 77.5% smaller theoretically), and 50% within +2 pp (92.2 MB, 80.0%).
+9. **Theoretical size overstates the saving for small models:** the BnB NF4 checkpoint of Tiny is 32.8% smaller than FP16, not 75.0%, and a bitmask only pays off meaningfully next to 4-bit weights from 40% sparsity [23].
+10. **Methodological:** the 1,320 test utterances are only 96 sentences, so utterance-level bootstrap intervals are too narrow; sentence resampling widens the Tiny baseline interval from 12.63-14.83 to 11.40-16.12 [27, 28]. Conclusions about differences below about 1 pp are limited to "measurable on this test set".
+
+#### Full Week 18 Results
+
+`ns` = interval contains 0; `*` = hundreds of long outputs, adjusted value unreliable. Sizes in MB.
+
+##### Tiny-EN-CMU: FP16 baseline 40.17% raw, 13.71% adjusted, 7 long outputs, 72.0 MB
+
+**Post-training quantization**
+
+| Method | WER (%) | Adjusted WER (%) | Adjusted change vs FP16 [95% CI] | Long outputs | Theoretical size (MB) | Stored size (MB) |
+|---|---|---|---|---|---|---|
+| INT8 naive | 48.57% | 14.51% | +0.80 [-0.15, +2.46] ns | 9 | 36.0 | 75.4 |
+| FP8 naive | 34.69% | 13.56% | -0.15 [-0.57, +0.21] ns | 5 | 36.0 | 75.4 |
+| BnB INT8 | 43.05% | 13.52% | -0.19 [-0.39, +0.00] ns | 7 | 36.0 | 56.3 |
+| BnB NF4 | 47.94% | 14.54% | +0.83 [+0.12, +1.51] | 11 | 18.0 | 48.4 |
+| BnB FP4 | 63.90% | 17.45% | +3.75 [+2.60, +5.08] | 13 | 18.0 | 48.4 |
+| FP4 naive | 175.98% | 25.90% | +12.19 [+6.20, +20.03] | 39 | 18.0 | 75.4 |
+| INT8 percentile | 170.76% | 16.01% | +2.31 [+1.40, +3.29] | 43 | 36.0 | 75.4 |
+| FP8 percentile | 175.00% | 16.14% | +2.42 [+1.45, +3.48] | 43 | 36.0 | 75.4 |
+| FP4 percentile | 198.67% | 23.37% | +9.66 [+7.30, +12.31] | 55 | 18.0 | 75.4 |
+| INT4 percentile | 4081.82% | 61.71% | +48.00 [+21.59, +70.41] * | 1034 | 18.0 | 75.4 |
+| INT4 naive | 2497.39% | 353.23% | +339.52 [+255.64, +427.10] * | 551 | 18.0 | 75.4 |
+
+**Magnitude pruning (per layer)**
+
+| Method | WER (%) | Adjusted WER (%) | Adjusted change vs FP16 [95% CI] | Long outputs | Theoretical size (MB) | Stored size (MB) |
+|---|---|---|---|---|---|---|
+| Magnitude 0.10 | 32.97% | 14.04% | +0.33 [+0.02, +0.67] | 6 | 69.4 | 72.0 |
+| Magnitude 0.20 | 28.96% | 14.22% | +0.51 [-0.06, +1.15] ns | 5 | 62.5 | 72.0 |
+| Magnitude 0.30 | 82.67% | 15.55% | +1.84 [+0.92, +2.80] | 21 | 55.5 | 72.0 |
+| Magnitude 0.40 | 375.61% | 20.38% | +6.67 [-7.04, +16.79] ns * | 130 | 48.6 | 72.0 |
+| Magnitude 0.45 | 828.56% | 92.10% | +78.39 [+60.06, +99.90] * | 407 | 45.1 | 72.0 |
+| Magnitude 0.50 | 608.70% | 332.80% | +319.09 [+276.67, +368.49] * | 380 | 41.6 | 72.0 |
+
+**Wanda pruning**
+
+| Method | WER (%) | Adjusted WER (%) | Adjusted change vs FP16 [95% CI] | Long outputs | Theoretical size (MB) | Stored size (MB) |
+|---|---|---|---|---|---|---|
+| Wanda 0.10 | 36.06% | 13.67% | -0.04 [-0.23, +0.16] ns | 6 | 69.5 | 72.0 |
+| Wanda 0.20 | 32.70% | 13.73% | +0.02 [-0.38, +0.43] ns | 6 | 62.6 | 72.0 |
+| Wanda 0.30 | 31.56% | 14.48% | +0.77 [+0.22, +1.32] | 5 | 55.5 | 72.0 |
+| Wanda 0.40 | 44.13% | 17.00% | +3.29 [+1.84, +5.01] | 9 | 48.7 | 72.0 |
+| Wanda 0.45 | 67.83% | 19.02% | +5.31 [+3.41, +7.33] | 16 | 45.2 | 72.0 |
+| Wanda 0.50 | 134.87% | 28.10% | +14.39 [+9.53, +20.56] | 37 | 41.6 | 72.0 |
+
+**Wanda pruning followed by quantization**
+
+| Method | WER (%) | Adjusted WER (%) | Adjusted change vs FP16 [95% CI] | Long outputs | Theoretical size (MB) | Stored size (MB) |
+|---|---|---|---|---|---|---|
+| INT8 naive + Wanda 0.30 | 37.48% | 14.68% | +0.97 [+0.40, +1.60] | 6 | 31.2 | 75.4 |
+| FP8 naive + Wanda 0.30 | 24.49% | 14.59% | +0.88 [+0.29, +1.48] | 3 | 31.2 | 75.4 |
+| FP4 naive + Wanda 0.30 | 152.16% | 23.50% | +9.79 [+5.78, +16.44] | 35 | 19.0 | 75.4 |
+| BnB NF4 + Wanda 0.30 | 31.22% | 16.03% | +2.32 [+1.40, +3.27] | 6 | 19.0 | 48.4 |
+| BnB FP4 + Wanda 0.30 | 35.14% | 18.93% | +5.22 [+3.98, +6.58] | 4 | 19.0 | 48.4 |
+| INT8 naive + Wanda 0.40 | 50.37% | 16.70% | +2.99 [+1.76, +4.37] | 11 | 27.8 | 75.4 |
+| FP8 naive + Wanda 0.40 | 49.66% | 17.08% | +3.37 [+2.01, +4.97] | 10 | 27.8 | 75.4 |
+| FP4 naive + Wanda 0.40 | 184.00% | 27.80% | +14.09 [+10.57, +18.48] | 42 | 17.3 | 75.4 |
+| BnB NF4 + Wanda 0.40 | 62.10% | 20.34% | +6.63 [+4.72, +8.85] | 15 | 17.3 | 48.4 |
+| BnB FP4 + Wanda 0.40 | 86.03% | 22.87% | +9.16 [+6.70, +11.87] | 19 | 17.3 | 48.4 |
+| INT8 naive + Wanda 0.50 | 144.67% | 28.08% | +14.37 [+9.59, +20.52] | 40 | 24.3 | 75.4 |
+| FP8 naive + Wanda 0.50 | 103.45% | 29.63% | +15.92 [+9.39, +25.59] | 28 | 24.3 | 75.4 |
+| FP4 naive + Wanda 0.50 | 843.33% | 67.00% | +53.29 [+36.23, +73.09] * | 196 | 15.6 | 75.4 |
+| BnB NF4 + Wanda 0.50 | 137.02% | 29.96% | +16.25 [+12.81, +20.04] | 39 | 15.6 | 48.4 |
+| BnB FP4 + Wanda 0.50 | 273.06% | 36.91% | +23.20 [+18.67, +28.18] | 89 | 15.6 | 48.4 |
+
+##### Base-EN-CMU: FP16 baseline 40.24% raw, 11.60% adjusted, 7 long outputs, 138.5 MB
+
+**Post-training quantization**
+
+| Method | WER (%) | Adjusted WER (%) | Adjusted change vs FP16 [95% CI] | Long outputs | Theoretical size (MB) | Stored size (MB) |
+|---|---|---|---|---|---|---|
+| INT8 naive | 51.04% | 11.71% | +0.11 [-0.22, +0.45] ns | 10 | 69.2 | 122.0 |
+| FP8 naive | 49.47% | 11.69% | +0.09 [-0.15, +0.45] ns | 10 | 69.2 | 122.0 |
+| BnB INT8 | 43.76% | 11.74% | +0.14 [-0.11, +0.49] ns | 9 | 69.2 | 96.5 |
+| BnB NF4 | 27.14% | 11.96% | +0.36 [-0.12, +0.86] ns | 4 | 34.6 | 75.5 |
+| BnB FP4 | 28.84% | 14.55% | +2.95 [+0.42, +8.22] | 4 | 34.6 | 75.5 |
+| FP4 naive | 163.12% | 18.69% | +7.08 [+3.44, +12.89] | 35 | 34.6 | 122.0 |
+| INT8 percentile | 142.03% | 18.94% | +7.34 [+4.21, +12.55] | 39 | 69.2 | 122.0 |
+| FP8 percentile | 132.46% | 16.97% | +5.37 [+3.67, +7.43] | 39 | 69.2 | 122.0 |
+| FP4 percentile | 206.75% | 20.90% | +9.29 [+7.22, +11.61] | 61 | 34.6 | 122.0 |
+| INT4 percentile | 738.03% | 24.78% | +13.18 [-2.00, +24.48] ns * | 236 | 34.6 | 122.0 |
+| INT4 naive | 1737.18% | 67.82% | +56.22 [+40.05, +75.06] * | 471 | 34.6 | 122.0 |
+
+**Magnitude pruning (per layer)**
+
+| Method | WER (%) | Adjusted WER (%) | Adjusted change vs FP16 [95% CI] | Long outputs | Theoretical size (MB) | Stored size (MB) |
+|---|---|---|---|---|---|---|
+| Magnitude 0.10 | 43.95% | 11.67% | +0.06 [-0.11, +0.23] ns | 8 | 133.4 | 138.5 |
+| Magnitude 0.20 | 51.65% | 11.69% | +0.09 [-0.49, +0.62] ns | 10 | 119.9 | 138.5 |
+| Magnitude 0.30 | 29.20% | 12.26% | +0.65 [-0.18, +1.33] ns | 4 | 106.5 | 138.5 |
+| Magnitude 0.40 | 141.81% | 12.45% | +0.84 [-9.68, +9.37] ns | 47 | 93.0 | 138.5 |
+| Magnitude 0.45 | 1494.79% | 67.44% | +55.84 [+10.47, +127.00] * | 527 | 86.3 | 138.5 |
+| Magnitude 0.50 | 5043.16% | 71.51% | +59.91 [+32.10, +82.15] * | 1207 | 79.5 | 138.5 |
+
+**Wanda pruning**
+
+| Method | WER (%) | Adjusted WER (%) | Adjusted change vs FP16 [95% CI] | Long outputs | Theoretical size (MB) | Stored size (MB) |
+|---|---|---|---|---|---|---|
+| Wanda 0.10 | 49.03% | 11.90% | +0.29 [-0.10, +0.80] ns | 9 | 133.4 | 138.5 |
+| Wanda 0.20 | 44.41% | 12.00% | +0.39 [+0.01, +0.85] | 9 | 120.0 | 138.5 |
+| Wanda 0.30 | 43.25% | 12.32% | +0.72 [+0.16, +1.39] | 9 | 106.6 | 138.5 |
+| Wanda 0.40 | 53.25% | 12.68% | +1.08 [+0.05, +2.12] | 12 | 93.2 | 138.5 |
+| Wanda 0.45 | 44.12% | 15.49% | +3.89 [+1.85, +7.15] | 9 | 86.4 | 138.5 |
+| Wanda 0.50 | 40.63% | 15.38% | +3.77 [+2.46, +5.09] | 8 | 79.5 | 138.5 |
+
+**Wanda pruning followed by quantization**
+
+| Method | WER (%) | Adjusted WER (%) | Adjusted change vs FP16 [95% CI] | Long outputs | Theoretical size (MB) | Stored size (MB) |
+|---|---|---|---|---|---|---|
+| INT8 naive + Wanda 0.30 | 36.76% | 12.23% | +0.62 [+0.10, +1.23] | 7 | 59.4 | 122.0 |
+| FP8 naive + Wanda 0.30 | 34.63% | 12.24% | +0.64 [+0.02, +1.32] | 6 | 59.4 | 122.0 |
+| FP4 naive + Wanda 0.30 | 99.99% | 17.30% | +5.69 [+3.66, +8.37] | 22 | 35.8 | 122.0 |
+| BnB NF4 + Wanda 0.30 | 51.17% | 13.37% | +1.77 [+0.50, +3.48] | 10 | 35.8 | 75.5 |
+| BnB FP4 + Wanda 0.30 | 39.22% | 13.92% | +2.31 [+0.79, +4.78] | 8 | 35.8 | 75.5 |
+| INT8 naive + Wanda 0.40 | 68.60% | 12.85% | +1.24 [+0.20, +2.34] | 16 | 52.7 | 122.0 |
+| FP8 naive + Wanda 0.40 | 51.88% | 12.84% | +1.24 [+0.22, +2.24] | 11 | 52.7 | 122.0 |
+| FP4 naive + Wanda 0.40 | 138.14% | 17.13% | +5.53 [+3.45, +7.82] | 36 | 32.5 | 122.0 |
+| BnB NF4 + Wanda 0.40 | 58.40% | 13.26% | +1.66 [+0.56, +2.69] | 13 | 32.5 | 75.5 |
+| BnB FP4 + Wanda 0.40 | 45.38% | 9.80% | -1.80 [-12.36, +3.26] ns | 12 | 32.5 | 75.5 |
+| INT8 naive + Wanda 0.50 | 40.37% | 15.56% | +3.95 [+2.65, +5.29] | 8 | 45.9 | 122.0 |
+| FP8 naive + Wanda 0.50 | 42.62% | 15.52% | +3.92 [+2.55, +5.32] | 9 | 45.9 | 122.0 |
+| FP4 naive + Wanda 0.50 | 138.95% | 24.56% | +12.95 [+9.09, +17.80] | 38 | 29.1 | 122.0 |
+| BnB NF4 + Wanda 0.50 | 64.98% | 16.91% | +5.30 [+3.76, +6.97] | 17 | 29.1 | 75.5 |
+| BnB FP4 + Wanda 0.50 | 41.12% | 17.49% | +5.89 [+4.08, +7.75] | 12 | 29.1 | 75.5 |
+
+##### Small-EN-CMU: FP16 baseline 24.70% raw, 10.54% adjusted, 4 long outputs, 461.1 MB
+
+**Post-training quantization**
+
+| Method | WER (%) | Adjusted WER (%) | Adjusted change vs FP16 [95% CI] | Long outputs | Theoretical size (MB) | Stored size (MB) |
+|---|---|---|---|---|---|---|
+| INT8 naive | 14.68% | 10.47% | -0.07 [-0.33, +0.15] ns | 1 | 230.6 | 310.5 |
+| FP8 naive | 24.74% | 10.58% | +0.04 [-0.11, +0.19] ns | 4 | 230.6 | 310.5 |
+| BnB INT8 | 23.22% | 10.51% | -0.03 [-0.24, +0.16] ns | 3 | 230.6 | 272.1 |
+| BnB NF4 | 10.73% | 10.73% | +0.19 [-0.23, +0.63] ns | 0 | 115.3 | 177.6 |
+| BnB FP4 | 19.22% | 10.76% | +0.23 [-0.34, +0.73] ns | 2 | 115.3 | 177.6 |
+| FP4 naive | 46.84% | 12.54% | +2.00 [+0.97, +3.02] | 11 | 115.3 | 310.5 |
+| INT8 percentile | 77.57% | 13.02% | +2.48 [+1.36, +3.70] | 21 | 230.6 | 310.5 |
+| FP8 percentile | 76.13% | 13.37% | +2.83 [+1.55, +4.42] | 19 | 230.6 | 310.5 |
+| FP4 percentile | 88.05% | 15.21% | +4.67 [+2.90, +6.77] | 26 | 115.3 | 310.5 |
+| INT4 percentile | 157.41% | 17.55% | +7.01 [+4.69, +9.48] | 55 | 115.3 | 310.5 |
+| INT4 naive | 146.33% | 31.72% | +21.18 [+15.11, +28.75] | 38 | 115.3 | 310.5 |
+
+**Magnitude pruning (per layer)**
+
+| Method | WER (%) | Adjusted WER (%) | Adjusted change vs FP16 [95% CI] | Long outputs | Theoretical size (MB) | Stored size (MB) |
+|---|---|---|---|---|---|---|
+| Magnitude 0.10 | 20.62% | 10.70% | +0.16 [-0.13, +0.49] ns | 3 | 444.0 | 461.1 |
+| Magnitude 0.20 | 10.35% | 10.35% | -0.18 [-0.69, +0.26] ns | 0 | 398.6 | 461.1 |
+| Magnitude 0.30 | 12.86% | 9.84% | -0.70 [-1.42, -0.03] | 2 | 353.2 | 461.1 |
+| Magnitude 0.40 | 21.50% | 10.59% | +0.06 [-0.80, +0.80] ns | 6 | 307.8 | 461.1 |
+| Magnitude 0.45 | 32.18% | 12.45% | +1.91 [+0.02, +4.70] | 13 | 285.1 | 461.1 |
+| Magnitude 0.50 | 145.01% | 20.03% | +9.49 [+6.17, +13.09] | 60 | 262.4 | 461.1 |
+
+**Wanda pruning**
+
+| Method | WER (%) | Adjusted WER (%) | Adjusted change vs FP16 [95% CI] | Long outputs | Theoretical size (MB) | Stored size (MB) |
+|---|---|---|---|---|---|---|
+| Wanda 0.10 | 23.30% | 10.59% | +0.05 [-0.10, +0.23] ns | 3 | 444.1 | 461.1 |
+| Wanda 0.20 | 19.12% | 10.65% | +0.12 [-0.42, +0.65] ns | 2 | 398.8 | 461.1 |
+| Wanda 0.30 | 20.64% | 10.76% | +0.22 [-0.53, +1.06] ns | 3 | 353.4 | 461.1 |
+| Wanda 0.40 | 15.36% | 11.14% | +0.60 [-0.25, +1.64] ns | 1 | 307.9 | 461.1 |
+| Wanda 0.45 | 28.08% | 11.70% | +1.16 [-0.12, +2.69] ns | 4 | 285.4 | 461.1 |
+| Wanda 0.50 | 12.62% | 12.09% | +1.55 [+0.45, +2.64] | 1 | 262.4 | 461.1 |
+
+**Wanda pruning followed by quantization**
+
+| Method | WER (%) | Adjusted WER (%) | Adjusted change vs FP16 [95% CI] | Long outputs | Theoretical size (MB) | Stored size (MB) |
+|---|---|---|---|---|---|---|
+| INT8 naive + Wanda 0.30 | 15.11% | 10.87% | +0.33 [-0.32, +1.02] ns | 1 | 194.5 | 310.5 |
+| FP8 naive + Wanda 0.30 | 12.33% | 10.94% | +0.40 [-0.17, +0.99] ns | 1 | 194.5 | 310.5 |
+| FP4 naive + Wanda 0.30 | 47.04% | 12.80% | +2.26 [+1.19, +3.32] | 10 | 115.0 | 310.5 |
+| BnB NF4 + Wanda 0.30 | 15.20% | 10.96% | +0.42 [-0.37, +1.29] ns | 1 | 115.0 | 177.6 |
+| BnB FP4 + Wanda 0.30 | 11.40% | 11.40% | +0.86 [-0.01, +1.93] ns | 0 | 115.0 | 177.6 |
+| INT8 naive + Wanda 0.40 | 15.31% | 11.07% | +0.53 [-0.32, +1.57] ns | 1 | 171.7 | 310.5 |
+| FP8 naive + Wanda 0.40 | 23.73% | 11.07% | +0.53 [-0.36, +1.58] ns | 3 | 171.7 | 310.5 |
+| FP4 naive + Wanda 0.40 | 30.79% | 14.02% | +3.49 [+2.14, +4.84] | 6 | 103.6 | 310.5 |
+| BnB NF4 + Wanda 0.40 | 16.17% | 11.31% | +0.77 [-0.18, +1.81] ns | 2 | 103.6 | 177.6 |
+| BnB FP4 + Wanda 0.40 | 19.93% | 11.51% | +0.97 [-0.06, +2.20] ns | 2 | 103.6 | 177.6 |
+| INT8 naive + Wanda 0.50 | 15.00% | 11.85% | +1.31 [+0.21, +2.40] | 1 | 148.9 | 310.5 |
+| FP8 naive + Wanda 0.50 | 13.21% | 12.11% | +1.58 [+0.52, +2.63] | 2 | 148.9 | 310.5 |
+| FP4 naive + Wanda 0.50 | 36.34% | 15.45% | +4.91 [+3.29, +6.66] | 8 | 92.2 | 310.5 |
+| BnB NF4 + Wanda 0.50 | 26.84% | 12.52% | +1.98 [+0.89, +3.10] | 4 | 92.2 | 177.6 |
+| BnB FP4 + Wanda 0.50 | 18.69% | 13.04% | +2.51 [+1.32, +3.73] | 4 | 92.2 | 177.6 |
+
 ---
 
 
@@ -2864,8 +3233,8 @@ NF4's advantage holds for both Tiny checkpoints. The raw CMU figures appeared to
 | Week 15 | Combined Wanda pruning + quantization, 228 configurations: four English-only checkpoints x seven methods x six sparsities (168, the paper subset) plus Tiny-EN-Dutta and Small-multilingual x five methods x six sparsities (60). Interaction is checkpoint- and method-dependent: INT8 naive and BnB-INT8 never compound across the paper subset, BnB NF4 is the best 4-bit method, and BnB FP4 on Tiny-EN-Dutta compounds severely at all six sparsities. Documented: naive/pct quantization orphans Whisper's tied input/output embedding while bitsandbytes does not; operating points under a +2 pp budget (57-79% theoretical reduction) and a repetition-loop audit of the failures. | ✅ Done |
 | Week 16 | Cross-corpus validation on CMU Kids [20] (licensed dataset, all 6 checkpoints): quantization, Wanda pruning (10-40%), and combined settings, 180 results in the initial batch. The training-recipe reversal replicates and sharpens into a mechanistic finding (decoder repetition-loop amplification). Parameter-count correction: Tiny-EN-ours/Dutta confirmed exactly identical (37.76M each). The INT8-compounding and FP4/NF4 findings are restated after the Week 17 audit. | ✅ Done |
 | Week 17 | CMU Kids: magnitude pruning (36 results) and Wanda at 45% and 50% (12 results), 228 CMU results in total. Collapse onset is identical on both corpora for all six checkpoints; the Base-EN-ours vs Tiny-EN-ours reversal under magnitude pruning replicates and Wanda removes it on both. Outlier audit: CMU utterances average 8 words, so one looping output adds up to about 3.5 pp; raw CMU baselines are inflated (8 long outputs are 48% of Small-multilingual's 37.83%), INT8 compounding falls from 5 of 12 comparisons to 1 of 12, and the FP4/NF4 flip for Base-EN-ours becomes a tie. | ✅ Done |
+| Week 18 | CMU Kids with CMU-trained checkpoints [20]: the shipped Kaldi split leaks (98.4% of test text occurs in training), so a sentence-disjoint split was built (2,893 train, 359 dev, 1,320 test utterances; 10 held-out speakers). tiny.en, base.en and small.en were fine-tuned on it (checkpoint chosen by dev loss; best epoch 0.75 for all three) and the quantization, magnitude, Wanda and combined studies were repeated: 114 compressed-model results plus 12 FP16 evaluations, with sentence-clustered paired bootstrap intervals [27, 28]. Fine-tuning improves adjusted WER by 4.1 to 8.4 pp over the untuned models, while raw WER rises because of looping outputs. 8-bit quantization is lossless at every size; BnB NF4 costs 0.83, 0.36 and 0.19 pp on Tiny, Base and Small; magnitude-pruning collapse onset matches MyST (40%, 40%, 50%) [25]; Wanda has no cliff [26]; within +2 pp the checkpoints reach 75.0% (Tiny, NF4), 76.5% (Base, NF4 + Wanda 40%) and 80.0% (Small, NF4 + Wanda 50%) theoretical reduction, with a stored-size caveat for BnB checkpoints. | ✅ Done |
 | Paper | Compression Robustness of Whisper Models for Children's Speech ASR submitted to ICASSP 2027 (four English-only checkpoints; quantization, magnitude and Wanda pruning, combined compression; MyST only). | ✅ Submitted |
-
 ---
 
 ## 🔖 References
@@ -2898,3 +3267,5 @@ NF4's advantage holds for both Tiny checkpoints. The raw CMU figures appeared to
 | [24] | Williams, M., & Aletras, N. (2024). *On the Impact of Calibration Data in Post-training Quantization and Pruning.* ACL 2024. arXiv:2311.09755. |
 | [25] | Han, S., Pool, J., Tran, J., & Dally, W. J. (2015). *Learning Both Weights and Connections for Efficient Neural Networks.* NeurIPS 2015. |
 | [26] | Sun, M., Liu, Z., Bair, A., & Kolter, J. Z. (2024). *A Simple and Effective Pruning Approach for Large Language Models.* ICLR 2024. arXiv:2306.11695. |
+| [27] | Bisani, M., & Ney, H. (2004). *Bootstrap Estimates for Confidence Intervals in ASR Performance Evaluation.* ICASSP 2004. |
+| [28] | Efron, B., & Tibshirani, R. J. (1993). *An Introduction to the Bootstrap.* Chapman & Hall. |
